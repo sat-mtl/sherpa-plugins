@@ -27,6 +27,10 @@ permissions:
 env:
   # Default version; overridden by the workflow_dispatch input or the tag name.
   SHERPA_VERSION: "1.13.3"
+  # Bound the compile parallelism: GitHub runners have little RAM (7-16 GB) and
+  # sherpa's heavy C++ TUs (kaldi / openfst / espeak / piper) OOM with an
+  # unbounded `-j`. Keep this small.
+  BUILD_JOBS: "2"
 
 jobs:
   build:
@@ -91,7 +95,7 @@ jobs:
       - name: Build & install
         shell: bash
         working-directory: sherpa-onnx
-        run: cmake --build build --config Release --target install -j
+        run: cmake --build build --config Release --target install --parallel "${BUILD_JOBS}"
 
       - name: Package (root = include/ lib/ [bin/])
         shell: bash
