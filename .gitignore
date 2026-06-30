@@ -1,0 +1,31 @@
+*.zip
+build-*
+AppRun*
+*.AppImage
+*.txz
+*.AppDir
+wasm-release
+make-build
+cmake-build-debug
+cmake-debug
+3rdparty/VST3 SDK
+*.jsc
+*.qmlc
+.idea
+CMakeFiles*
+build
+Trash
+bin
+libs
+.DS_Store
+*.user
+Makefile
+*.autosave
+# temporary files
+*~
+*.o
+*.db
+.vs
+.cmake
+.vscode
+package/

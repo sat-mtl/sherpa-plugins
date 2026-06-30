@@ -1,0 +1,29 @@
+name: Build
+on:
+  pull_request:
+  push:
+    branches: [main, master]
+    tags: ['v*']
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  # Build in/against ossia score.
+  score:
+    uses: ossia/actions/.github/workflows/score-addon.yml@master
+    secrets: inherit
+    with:
+      release: false  # set true once a release.sh is added
+  # Build the same object(s) standalone, one artifact per back-end. The Max /
+  # TouchDesigner / Godot jobs zip build/package/sherpa-plugins/ (produced by
+  # avnd_addon_package), which bundles the prebuilt sherpa-onnx + onnxruntime libs.
+  standalone:
+    uses: ossia/actions/.github/workflows/avnd-addon.yml@master
+    secrets: inherit
+    with:
+      pd: true
+      max: true
+      python: true
+      touchdesigner: true
+      godot: true
+      # wasm omitted: sherpa-onnx ships no emscripten C++ prebuilt.
