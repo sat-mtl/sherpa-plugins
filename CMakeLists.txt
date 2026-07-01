@@ -137,6 +137,22 @@ target_sources(sherpa_plugins PRIVATE
 avnd_addon_finalize(NAME sherpa_plugins
     UUID 692ee9eb-6b46-428c-acd8-83528ea9d139 VERSION 1)
 
+# In a score build, sherpa-onnx is NOT a host-provided library (unlike onnxruntime
+# for score-addon-onnx, which the score host bundles). So when the runtime libs
+# were located (-DSHERPA_ONNX_DIR=<install-with-lib/> or -DSHERPA_ONNX_FETCH_LIBS=ON),
+# copy them next to the built plugin: the objects dlopen libsherpa-onnx-c-api from
+# their own module folder (get_module_folder()), and that library's $ORIGIN rpath
+# then resolves libonnxruntime beside it. Without this the plugin loads but every
+# object reports unavailable at runtime ("libsherpa-onnx-c-api.so ... not found").
+# Standalone back-ends get the libs via avnd_addon_package below instead.
+if(AVND_ADDON_SCORE AND SHERPA_SUPPORT_FILES)
+  add_custom_command(TARGET sherpa_plugins POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            ${SHERPA_SUPPORT_FILES} "$<TARGET_FILE_DIR:sherpa_plugins>"
+    COMMAND_EXPAND_LISTS VERBATIM
+    COMMENT "sherpa-plugins: copying sherpa-onnx runtime libs next to the plugin")
+endif()
+
 # Standalone distributable packages: bundle the prebuilt sherpa shared libs into
 # the Max / TouchDesigner / Godot packages so each object dlopens them from beside
 # its own module. Ignored inside score (the host bundles them). NAME MUST equal the
