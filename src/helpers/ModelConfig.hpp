@@ -79,6 +79,17 @@ inline std::string file_if_exists(const fs::path& dir, std::string_view name)
   return fs::exists(p, ec) ? p.string() : std::string{};
 }
 
+// Lowercased last path component, robust to a trailing separator: a folder path
+// like ".../my-model/" has an EMPTY filename(), which would break the family
+// auto-detection that keys on the directory name. Fall back to the parent then.
+inline std::string dir_name(const fs::path& d)
+{
+  std::string n = d.filename().string();
+  if(n.empty())
+    n = d.parent_path().filename().string();
+  return to_lower(n);
+}
+
 // ---------------------------------------------------------------------------
 // Offline (batch) ASR
 // ---------------------------------------------------------------------------
@@ -97,7 +108,7 @@ inline OfflineRecognizerHandle create_offline_recognizer(
   std::string dec = find_in_dir(d, {"decoder"});
   std::string joiner = find_in_dir(d, {"joiner"});
   std::string any = find_in_dir(d, {});
-  std::string dirname = to_lower(d.filename().string());
+  std::string dirname = dir_name(d);
 
   std::string dec_method{decoding};
 
@@ -340,7 +351,7 @@ inline OnlineRecognizerHandle create_online_recognizer(
   std::string dec = find_in_dir(d, {"decoder"});
   std::string joiner = find_in_dir(d, {"joiner"});
   std::string any = find_in_dir(d, {});
-  std::string dirname = to_lower(d.filename().string());
+  std::string dirname = dir_name(d);
 
   std::string dec_method{decoding};
   std::string hotwords{hotwords_file};
@@ -501,7 +512,7 @@ inline TtsHandle create_tts(
   std::string tokens = file_if_exists(d, "tokens.txt");
   std::string voices = find_in_dir(d, {"voices"}, ""); // .bin
   std::string vocoder = find_in_dir(d, {"vocoder", "vocos", "hifigan"});
-  std::string acoustic = find_in_dir(d, {"acoustic", "matcha"});
+  std::string acoustic = find_in_dir(d, {"acoustic", "matcha", "steps"});
   std::string model = find_in_dir(d, {"model"});
   if(model.empty())
     model = find_in_dir(d, {}); // first .onnx
@@ -513,7 +524,7 @@ inline TtsHandle create_tts(
     if(fs::is_directory(espeak, ec))
       data_dir = espeak.string();
   }
-  std::string dirname = to_lower(d.filename().string());
+  std::string dirname = dir_name(d);
 
   std::string enc = find_in_dir(d, {"encoder"});
   std::string dec = find_in_dir(d, {"decoder"});
@@ -541,24 +552,41 @@ inline TtsHandle create_tts(
   else if(icontains(dirname, "supertonic"))
   {
     // Named locals: the c_str() must outlive the Create* call below.
-    static thread_local std::string dp, te, ve;
+    static thread_local std::string dp, te, ve, tj, ui, vs;
     dp = find_in_dir(d, {"duration"});
     te = find_in_dir(d, {"text_encoder"});
     ve = find_in_dir(d, {"vector"});
+    tj = find_in_dir(d, {"tts"}, ".json");
+    ui = find_in_dir(d, {"unicode", "indexer"}, ".bin");
+    vs = find_in_dir(d, {"voice"}, ".bin"); // voice style / speaker embedding
     cfg.model.supertonic.duration_predictor = dp.c_str();
     cfg.model.supertonic.text_encoder = te.c_str();
     cfg.model.supertonic.vector_estimator = ve.c_str();
     cfg.model.supertonic.vocoder = vocoder.c_str();
+    if(!tj.empty())
+      cfg.model.supertonic.tts_json = tj.c_str();
+    if(!ui.empty())
+      cfg.model.supertonic.unicode_indexer = ui.c_str();
+    if(!vs.empty())
+      cfg.model.supertonic.voice_style = vs.c_str();
   }
   else if(icontains(dirname, "pocket"))
   {
-    static thread_local std::string lf, lm;
+    static thread_local std::string lf, lm, tc, vj, ts;
     lf = find_in_dir(d, {"lm_flow"});
     lm = find_in_dir(d, {"lm_main"});
+    tc = find_in_dir(d, {"text_conditioner", "conditioner"});
+    vj = find_in_dir(d, {"vocab"}, ".json");
+    ts = find_in_dir(d, {"token_scores", "token_score"}, ".json");
     cfg.model.pocket.lm_flow = lf.c_str();
     cfg.model.pocket.lm_main = lm.c_str();
     cfg.model.pocket.encoder = enc.c_str();
     cfg.model.pocket.decoder = dec.c_str();
+    cfg.model.pocket.text_conditioner = tc.c_str();
+    if(!vj.empty())
+      cfg.model.pocket.vocab_json = vj.c_str();
+    if(!ts.empty())
+      cfg.model.pocket.token_scores_json = ts.c_str();
   }
   else if(!voices.empty() && (icontains(dirname, "kitten") || icontains(model, "kitten")))
   {
@@ -581,9 +609,13 @@ inline TtsHandle create_tts(
     cfg.model.kokoro.length_scale = 1.0f;
     adv.apply_float("length_scale", cfg.model.kokoro.length_scale);
   }
-  else if(!vocoder.empty() && !acoustic.empty())
+  else if(!vocoder.empty())
   {
-    cfg.model.matcha.acoustic_model = acoustic.c_str();
+    // Matcha: an acoustic model + a separate vocoder (vocos / hifigan). The
+    // acoustic file may be named acoustic / matcha / model-steps-*; fall back to
+    // the first non-vocoder .onnx (`model`) when no explicit name matched.
+    const std::string& am = !acoustic.empty() ? acoustic : model;
+    cfg.model.matcha.acoustic_model = am.c_str();
     cfg.model.matcha.vocoder = vocoder.c_str();
     cfg.model.matcha.tokens = tokens.c_str();
     if(!lexicon.empty())
