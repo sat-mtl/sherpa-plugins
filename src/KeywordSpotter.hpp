@@ -18,12 +18,14 @@
 // independently.
 
 #include "helpers/AudioChunker.hpp"
+#include "helpers/Common.hpp"
 #include "helpers/ModelConfig.hpp"
 
 #include <halp/audio.hpp>
 #include <halp/callback.hpp>
 #include <halp/controls.hpp>
 #include <halp/controls.basic.hpp>
+#include <halp/controls.enums.hpp>
 #include <halp/file_port.hpp>
 #include <halp/meta.hpp>
 
@@ -44,7 +46,7 @@ namespace sherpa
 // (invalid) handle. Runs on the worker thread. Null-checks the extended symbol.
 inline KeywordSpotterHandle create_keyword_spotter(
     std::string_view dir, int num_threads, float threshold,
-    std::string_view keywords_file)
+    std::string_view keywords_file, const char* provider = "cpu")
 {
   const auto& L = SherpaLoader::instance();
   if(!L.SherpaOnnxCreateKeywordSpotter)
@@ -70,7 +72,7 @@ inline KeywordSpotterHandle create_keyword_spotter(
   cfg.feat_config.feature_dim = 80;
   cfg.model_config.tokens = tokens.c_str();
   cfg.model_config.num_threads = num_threads;
-  cfg.model_config.provider = "cpu";
+  cfg.model_config.provider = provider;
   cfg.model_config.transducer.encoder = enc.c_str();
   cfg.model_config.transducer.decoder = dec.c_str();
   cfg.model_config.transducer.joiner = joiner.c_str();
@@ -101,6 +103,7 @@ public:
     halp::file_port<"Keywords file"> keywords_file;
     halp::lineedit<"Keywords", ""> keywords;
     halp::knob_f32<"Threshold", halp::range{0., 1., 0.25}> threshold;
+    halp::enum_t<Provider, "Provider"> provider;
     halp::hslider_i32<"Threads", halp::range{1., 8., 1.}> threads;
   } inputs;
 
@@ -118,6 +121,7 @@ public:
     int num_threads = 1;
     float threshold = 0.25f;
     bool reload = false;
+    Provider provider = Provider::CPU;
     std::string want_model;
     std::string want_keywords;      // inline keywords (line-edit)
     std::string want_keywords_file; // keywords file path
@@ -211,6 +215,7 @@ inline void KeywordSpotter::dispatch()
   job.rate = m_host_rate;
   job.num_threads = inputs.threads.value;
   job.threshold = m_requested_threshold;
+  job.provider = inputs.provider.value;
   job.want_model = m_requested_model;
   job.want_keywords = m_requested_keywords;
   job.want_keywords_file = m_requested_keywords_file;
@@ -243,7 +248,7 @@ KeywordSpotter::worker::work(std::shared_ptr<Job> job)
   {
     job->spotter = std::make_shared<KeywordSpotterHandle>(create_keyword_spotter(
         job->want_model, job->num_threads, job->threshold,
-        job->want_keywords_file));
+        job->want_keywords_file, provider_str(job->provider)));
     job->stream.reset();
   }
   if(have_kws && job->spotter && *job->spotter && (!job->stream || !*job->stream))

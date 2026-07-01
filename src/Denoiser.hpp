@@ -24,6 +24,7 @@
 // they persist across chunks and are recreated only on a model/mode change.
 
 #include "helpers/AudioChunker.hpp"
+#include "helpers/Common.hpp"
 #include "helpers/ModelConfig.hpp"
 
 #include <halp/audio.hpp>
@@ -65,6 +66,7 @@ public:
     halp::dynamic_audio_bus<"In", float> audio;
     halp::folder_port<"Model"> model;
     halp::enum_t<Mode, "Mode"> mode;
+    halp::enum_t<Provider, "Provider"> provider;
     halp::hslider_i32<"Threads", halp::range{1., 8., 1.}> threads;
   } inputs;
 
@@ -83,6 +85,7 @@ public:
     int model_rate = 16000;
     bool use_online = false;
     bool reload = false;
+    Provider provider = Provider::CPU;
     Mode mode = Mode::Auto;
     std::string want_model;
     std::shared_ptr<OnlineDenoiserHandle> online;
@@ -175,6 +178,7 @@ inline void Denoiser::dispatch()
   m_accum.drain_into(job.samples);
   job.rate = m_host_rate;
   job.num_threads = inputs.threads.value;
+  job.provider = inputs.provider.value;
   job.want_model = m_requested_model;
   job.mode = m_requested_mode;
   job.reload = m_reload;
@@ -254,7 +258,7 @@ inline std::function<void(Denoiser&)> Denoiser::worker::work(std::shared_ptr<Job
       std::memset(&mc, 0, sizeof(mc));
       mc.num_threads = job->num_threads;
       mc.debug = 0;
-      mc.provider = "cpu";
+      mc.provider = provider_str(job->provider);
       if(is_dpdf)
         mc.dpdfnet.model = model_file.c_str();
       else

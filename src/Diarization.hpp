@@ -14,11 +14,13 @@
 // the audio thread. See helpers/AudioChunker.hpp for the threading contract.
 
 #include "helpers/AudioChunker.hpp"
+#include "helpers/Common.hpp"
 #include "helpers/ModelConfig.hpp"
 
 #include <halp/audio.hpp>
 #include <halp/callback.hpp>
 #include <halp/controls.hpp>
+#include <halp/controls.enums.hpp>
 #include <halp/file_port.hpp>
 #include <halp/meta.hpp>
 
@@ -38,7 +40,8 @@ namespace sherpa
 // embedding .onnx. Detect each by filename, zero-init the config, and create the
 // pipeline. Runs on the worker thread (filesystem + allocation) -- never on audio.
 inline OfflineSpeakerDiarizationHandle create_diarization(
-    std::string_view dir, int num_clusters, float threshold, int num_threads)
+    std::string_view dir, int num_clusters, float threshold, int num_threads,
+    const char* provider = "cpu")
 {
   const auto& L = SherpaLoader::instance();
   if(!L.SherpaOnnxCreateOfflineSpeakerDiarization)
@@ -91,10 +94,10 @@ inline OfflineSpeakerDiarizationHandle create_diarization(
   std::memset(&cfg, 0, sizeof(cfg));
   cfg.segmentation.pyannote.model = seg.c_str();
   cfg.segmentation.num_threads = num_threads;
-  cfg.segmentation.provider = "cpu";
+  cfg.segmentation.provider = provider;
   cfg.embedding.model = emb.c_str();
   cfg.embedding.num_threads = num_threads;
-  cfg.embedding.provider = "cpu";
+  cfg.embedding.provider = provider;
   cfg.clustering.num_clusters = num_clusters; // <=0 => auto via threshold
   cfg.clustering.threshold = threshold;
   cfg.min_duration_on = 0.3f;
@@ -129,6 +132,7 @@ public:
     halp::toggle<"Record"> record;
     halp::spinbox_i32<"Num speakers", halp::range{-1., 32., -1.}> num_speakers;
     halp::knob_f32<"Cluster threshold", halp::range{0., 1., 0.5}> cluster_threshold;
+    halp::enum_t<Provider, "Provider"> provider;
     halp::hslider_i32<"Threads", halp::range{1., 8., 1.}> threads;
   } inputs;
 
@@ -148,6 +152,7 @@ public:
     int num_clusters = -1;
     float threshold = 0.5f;
     bool reload = false;
+    Provider provider = Provider::CPU;
     std::string want_model;
     std::shared_ptr<OfflineSpeakerDiarizationHandle> sd;
     std::vector<Segment> segments;
@@ -225,6 +230,7 @@ inline void Diarization::dispatch()
   job.num_threads = inputs.threads.value;
   job.num_clusters = inputs.num_speakers.value;
   job.threshold = inputs.cluster_threshold.value;
+  job.provider = inputs.provider.value;
   job.want_model = m_requested_model;
   job.reload = m_reload;
   job.sd = m_sd;
@@ -243,7 +249,8 @@ Diarization::worker::work(std::shared_ptr<Job> job)
   if(job->reload || !job->sd || !*job->sd)
   {
     job->sd = std::make_shared<OfflineSpeakerDiarizationHandle>(create_diarization(
-        job->want_model, job->num_clusters, job->threshold, job->num_threads));
+        job->want_model, job->num_clusters, job->threshold, job->num_threads,
+        provider_str(job->provider)));
   }
 
   job->segments.clear();

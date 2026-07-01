@@ -18,10 +18,12 @@
 // handlers -- keeping the manager owned by a single thread.
 
 #include "helpers/AudioChunker.hpp"
+#include "helpers/Common.hpp"
 #include "helpers/ModelConfig.hpp"
 
 #include <halp/audio.hpp>
 #include <halp/callback.hpp>
+#include <halp/controls.enums.hpp>
 #include <halp/controls.hpp>
 #include <halp/file_port.hpp>
 #include <halp/messages.hpp>
@@ -43,7 +45,8 @@ namespace sherpa
 // path). Runs on the worker thread (std::filesystem + allocation). Null-checks
 // the extended create symbol and reports an empty handle when unavailable.
 inline SpeakerEmbeddingExtractorHandle
-make_speaker_extractor(std::string_view dir, int num_threads)
+make_speaker_extractor(
+    std::string_view dir, int num_threads, const char* provider = "cpu")
 {
   const auto& L = SherpaLoader::instance();
   if(!L.SherpaOnnxCreateSpeakerEmbeddingExtractor)
@@ -76,7 +79,7 @@ make_speaker_extractor(std::string_view dir, int num_threads)
   cfg.model = model.c_str();
   cfg.num_threads = num_threads;
   cfg.debug = 0;
-  cfg.provider = "cpu";
+  cfg.provider = provider;
 
   return SpeakerEmbeddingExtractorHandle{
       L.SherpaOnnxCreateSpeakerEmbeddingExtractor(&cfg)};
@@ -99,6 +102,7 @@ public:
   {
     halp::dynamic_audio_bus<"In", float> audio;
     halp::folder_port<"Model"> model;
+    halp::enum_t<Provider, "Provider"> provider;
     halp::hslider_i32<"Threads", halp::range{1., 8., 1.}> threads;
     halp::knob_f32<"Threshold", halp::range{0., 1., 0.5}> threshold;
     halp::toggle<"Capture"> capture;
@@ -145,6 +149,7 @@ public:
     int num_threads = 1;
     float threshold = 0.5f;
     bool reload = false;
+    Provider provider = Provider::CPU;
     std::string want_model;
     std::string enroll_name;
     std::shared_ptr<SpeakerEmbeddingExtractorHandle> extractor;
@@ -234,6 +239,7 @@ inline void Speaker::dispatch()
   job.rate = m_host_rate;
   job.num_threads = inputs.threads.value;
   job.threshold = inputs.threshold.value;
+  job.provider = inputs.provider.value;
   job.want_model = m_requested_model;
   job.enroll_name = inputs.enroll_name.value; // snapshot at release
   job.reload = m_reload;
@@ -252,7 +258,8 @@ inline std::function<void(Speaker&)> Speaker::worker::work(std::shared_ptr<Job> 
   if(job->reload || !job->extractor || !*job->extractor)
   {
     job->extractor = std::make_shared<SpeakerEmbeddingExtractorHandle>(
-        make_speaker_extractor(job->want_model, job->num_threads));
+        make_speaker_extractor(
+            job->want_model, job->num_threads, provider_str(job->provider)));
   }
 
   job->embedding.clear();

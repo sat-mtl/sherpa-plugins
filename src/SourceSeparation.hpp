@@ -15,10 +15,12 @@
 // the worker; the worker result is applied on the processing thread, so the
 // playback buffers need no locking.
 
+#include "helpers/Common.hpp"
 #include "helpers/ModelConfig.hpp"
 
 #include <halp/audio.hpp>
 #include <halp/controls.hpp>
+#include <halp/controls.enums.hpp>
 #include <halp/file_port.hpp>
 #include <halp/meta.hpp>
 
@@ -53,6 +55,7 @@ public:
     halp::fixed_audio_bus<"In", float, 2> audio;
     halp::folder_port<"Model"> model;
     halp::toggle<"Record"> record;
+    halp::enum_t<Provider, "Provider"> provider;
     halp::hslider_i32<"Threads", halp::range{1., 8., 1.}> threads;
   } inputs;
 
@@ -76,6 +79,7 @@ public:
     double rate = 48000.;
     int num_threads = 1;
     bool reload = false;
+    Provider provider = Provider::CPU;
     std::string want_model;
     std::shared_ptr<SourceSeparationHandle> ss;
     std::array<StemOut, max_stems> out;
@@ -95,8 +99,8 @@ private:
   void dispatch();
   void push_stereo(int frames) noexcept;
 
-  static SourceSeparationHandle
-  create_engine(std::string_view dir, int num_threads);
+  static SourceSeparationHandle create_engine(
+      std::string_view dir, int num_threads, const char* provider = "cpu");
   static void copy_or_resample(
       const SherpaLoader& L, const float* src, int n, int sr, int host,
       std::vector<float>& dst);
@@ -214,6 +218,7 @@ inline void SourceSeparation::dispatch()
   m_accumR.clear();
   job.rate = m_host_rate;
   job.num_threads = inputs.threads.value;
+  job.provider = inputs.provider.value;
   job.want_model = m_requested_model;
   job.reload = m_reload;
   job.ss = m_ss;
@@ -224,8 +229,8 @@ inline void SourceSeparation::dispatch()
     worker.request(m_job);
 }
 
-inline SourceSeparationHandle
-SourceSeparation::create_engine(std::string_view dir, int num_threads)
+inline SourceSeparationHandle SourceSeparation::create_engine(
+    std::string_view dir, int num_threads, const char* provider)
 {
   const auto& L = SherpaLoader::instance();
   if(!L.SherpaOnnxCreateOfflineSourceSeparation)
@@ -242,7 +247,7 @@ SourceSeparation::create_engine(std::string_view dir, int num_threads)
   std::memset(&cfg, 0, sizeof(cfg));
   cfg.model.num_threads = num_threads;
   cfg.model.debug = 0;
-  cfg.model.provider = "cpu";
+  cfg.model.provider = provider;
 
   if(!uvr.empty())
   {
@@ -296,7 +301,7 @@ SourceSeparation::worker::work(std::shared_ptr<Job> job)
   if(job->reload || !job->ss || !*job->ss)
   {
     job->ss = std::make_shared<SourceSeparationHandle>(
-        create_engine(job->want_model, job->num_threads));
+        create_engine(job->want_model, job->num_threads, provider_str(job->provider)));
   }
 
   for(auto& s : job->out)

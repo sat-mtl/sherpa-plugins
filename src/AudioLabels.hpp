@@ -17,6 +17,7 @@
 // and dispatches. See helpers/AudioChunker.hpp for the threading contract.
 
 #include "helpers/AudioChunker.hpp"
+#include "helpers/Common.hpp"
 #include "helpers/ModelConfig.hpp"
 
 #include <halp/audio.hpp>
@@ -71,6 +72,7 @@ public:
     halp::folder_port<"Model"> model;
     halp::enum_t<Type, "Type"> type;
     halp::hslider_i32<"Top K", halp::range{1., 20., 5.}> top_k;
+    halp::enum_t<Provider, "Provider"> provider;
     halp::hslider_i32<"Threads", halp::range{1., 8., 1.}> threads;
     halp::toggle<"Listen"> listen;
   } inputs;
@@ -90,6 +92,7 @@ public:
     int num_threads = 1;
     int top_k = 5;
     bool reload = false;
+    Provider provider = Provider::CPU;
     Type type = Type::Auto;
     std::string want_model;
     int kind = -1;
@@ -177,6 +180,7 @@ inline void AudioLabels::dispatch()
   job.rate = m_host_rate;
   job.num_threads = inputs.threads.value;
   job.top_k = inputs.top_k.value;
+  job.provider = inputs.provider.value;
   job.want_model = m_requested_model;
   job.type = m_requested_type;
   job.reload = m_reload;
@@ -226,7 +230,7 @@ AudioLabels::worker::work(std::shared_ptr<Job> job)
       cfg.whisper.encoder = enc.c_str();
       cfg.whisper.decoder = dec.c_str();
       cfg.num_threads = job->num_threads;
-      cfg.provider = "cpu";
+      cfg.provider = provider_str(job->provider);
       job->slid = std::make_shared<SpokenLanguageIdHandle>(
           L.SherpaOnnxCreateSpokenLanguageIdentification(&cfg));
       if(*job->slid)
@@ -250,7 +254,7 @@ AudioLabels::worker::work(std::shared_ptr<Job> job)
       else
         cfg.model.zipformer.model = mdl.c_str();
       cfg.model.num_threads = job->num_threads;
-      cfg.model.provider = "cpu";
+      cfg.model.provider = provider_str(job->provider);
       cfg.labels = labels.c_str();
       cfg.top_k = job->top_k;
       job->tagger = std::make_shared<AudioTaggingHandle>(
