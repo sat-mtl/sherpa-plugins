@@ -10,10 +10,12 @@
 // synthesis, model loading and resampling happen on the worker. The worker result
 // is applied on the processing thread, so the playback buffer needs no locking.
 
+#include "helpers/Common.hpp"
 #include "helpers/ModelConfig.hpp"
 
 #include <halp/audio.hpp>
 #include <halp/callback.hpp>
+#include <halp/controls.enums.hpp>
 #include <halp/controls.hpp>
 #include <halp/file_port.hpp>
 #include <halp/meta.hpp>
@@ -44,6 +46,7 @@ public:
     halp::folder_port<"Model"> model;
     halp::hslider_i32<"Speaker", halp::range{0., 512., 0.}> speaker;
     halp::knob_f32<"Speed", halp::range{0.1, 3.0, 1.0}> speed;
+    halp::enum_t<Provider, "Provider"> provider;
     halp::hslider_i32<"Threads", halp::range{1., 8., 1.}> threads;
   } inputs;
 
@@ -61,6 +64,7 @@ public:
     int sid = 0;
     float speed = 1.f;
     int num_threads = 1;
+    Provider provider = Provider::CPU;
     double host_rate = 48000.;
     std::shared_ptr<TtsHandle> tts;
     std::vector<float> out; // synthesized, resampled to host_rate, mono
@@ -144,6 +148,7 @@ inline void Tts::dispatch()
   job.sid = inputs.speaker.value;
   job.speed = inputs.speed.value;
   job.num_threads = inputs.threads.value;
+  job.provider = inputs.provider.value;
   job.host_rate = m_host_rate;
   job.tts = m_tts;
   m_reload = false;
@@ -161,7 +166,8 @@ inline std::function<void(Tts&)> Tts::worker::work(std::shared_ptr<Job> job)
   if(job->reload || !job->tts || !*job->tts)
   {
     job->tts = std::make_shared<TtsHandle>(
-        model::create_tts(job->want_model, job->num_threads));
+        model::create_tts(job->want_model, job->num_threads,
+                          provider_str(job->provider)));
   }
 
   job->out.clear();

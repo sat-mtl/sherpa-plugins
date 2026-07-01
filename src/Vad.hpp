@@ -13,10 +13,12 @@
 // All sherpa calls run on the worker thread.
 
 #include "helpers/AudioChunker.hpp"
+#include "helpers/Common.hpp"
 #include "helpers/ModelConfig.hpp"
 
 #include <halp/audio.hpp>
 #include <halp/callback.hpp>
+#include <halp/controls.enums.hpp>
 #include <halp/controls.hpp>
 #include <halp/file_port.hpp>
 #include <halp/meta.hpp>
@@ -47,6 +49,7 @@ public:
     halp::folder_port<"Model"> model;
     halp::knob_f32<"Threshold", halp::range{0., 1., 0.5}> threshold;
     halp::toggle<"Emit audio"> emit_audio;
+    halp::enum_t<Provider, "Provider"> provider;
     halp::hslider_i32<"Threads", halp::range{1., 8., 1.}> threads;
   } inputs;
 
@@ -69,6 +72,7 @@ public:
     std::vector<float> samples;
     double rate = 16000.;
     int num_threads = 1;
+    Provider provider = Provider::CPU;
     float threshold = 0.5f;
     bool want_audio = false;
     bool reload = false;
@@ -141,6 +145,7 @@ inline void Vad::dispatch()
   m_accum.drain_into(job.samples);
   job.rate = m_host_rate;
   job.num_threads = inputs.threads.value;
+  job.provider = inputs.provider.value;
   job.threshold = inputs.threshold.value;
   job.want_audio = inputs.emit_audio.value;
   job.want_model = m_requested_model;
@@ -161,7 +166,8 @@ inline std::function<void(Vad&)> Vad::worker::work(std::shared_ptr<Job> job)
   if(job->reload || !job->vad || !*job->vad)
   {
     job->vad = std::make_shared<VadHandle>(model::create_vad(
-        job->want_model, job->threshold, 16000, job->num_threads));
+        job->want_model, job->threshold, 16000, job->num_threads, 30.f,
+        provider_str(job->provider)));
     job->resampler.reset();
   }
   if(job->reload || !job->resampler || !*job->resampler)
