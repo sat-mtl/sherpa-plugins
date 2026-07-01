@@ -43,8 +43,12 @@ jobs:
           - { os: ubuntu-22.04,     triplet: linux-x64,    ext: tar.gz }
           # arm64 Linux runner (may need org enablement); remove if unavailable.
           - { os: ubuntu-24.04-arm, triplet: linux-arm64,  ext: tar.gz }
-          - { os: macos-14,         triplet: macos-arm64,  ext: tar.gz }
-          - { os: macos-13,         triplet: macos-x64,    ext: tar.gz }
+          - { os: macos-14,         triplet: macos-arm64,  ext: tar.gz, osx_arch: arm64 }
+          # Intel mac is cross-compiled on the arm64 runner: macos-13 (Intel) runners
+          # are queue-starved / being retired. sherpa's cmake/onnxruntime.cmake fetches
+          # the x86_64 ORT when CMAKE_OSX_ARCHITECTURES=x86_64 on an arm64 host, so the
+          # whole build cross-compiles cleanly.
+          - { os: macos-14,         triplet: macos-x64,    ext: tar.gz, osx_arch: x86_64 }
           - { os: windows-2022,     triplet: windows-x64,  ext: zip }
     steps:
       - name: Resolve version
@@ -86,6 +90,10 @@ jobs:
             -DSHERPA_ONNX_ENABLE_JNI=OFF
             "-DCMAKE_INSTALL_PREFIX=${GITHUB_WORKSPACE}/dist"
           )
+          # macOS: pin the target arch (arm64 native, x86_64 cross-compiled on arm).
+          if [[ -n "${{ matrix.osx_arch }}" ]]; then
+            common+=("-DCMAKE_OSX_ARCHITECTURES=${{ matrix.osx_arch }}")
+          fi
           if [[ "${{ runner.os }}" == "Windows" ]]; then
             cmake -S . -B build -A x64 "${common[@]}"
           else
