@@ -16,6 +16,8 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <initializer_list>
@@ -25,6 +27,25 @@
 namespace sherpa::model
 {
 namespace fs = std::filesystem;
+
+// Optional detection tracing: set the environment variable SHERPA_PLUGINS_DEBUG=1
+// to log model-directory scanning and the chosen family to stderr. Helps diagnose
+// "no output" / "Errors in config" from a specific model at runtime.
+inline bool debug_enabled() noexcept
+{
+  static const bool on = [] {
+    const char* v = std::getenv("SHERPA_PLUGINS_DEBUG");
+    return v && v[0] && v[0] != '0';
+  }();
+  return on;
+}
+
+#define SHERPA_DBG(...)                     \
+  do                                       \
+  {                                        \
+    if(::sherpa::model::debug_enabled())   \
+      std::fprintf(stderr, __VA_ARGS__);   \
+  } while(0)
 
 inline std::string to_lower(std::string s)
 {
@@ -529,6 +550,17 @@ inline TtsHandle create_tts(
   std::string enc = find_in_dir(d, {"encoder"});
   std::string dec = find_in_dir(d, {"decoder"});
 
+  std::error_code _dbgec;
+  const bool _isdir = fs::is_directory(d, _dbgec);
+  (void)_isdir; // only read under SHERPA_PLUGINS_DEBUG
+  SHERPA_DBG(
+      "[sherpa] TTS scan dir='%s' isdir=%d\n"
+      "  dirname='%s' tokens='%s' voices='%s' vocoder='%s'\n"
+      "  acoustic='%s' model='%s' enc='%s' dec='%s' lexicon='%s' data_dir='%s'\n",
+      std::string{dir}.c_str(), static_cast<int>(_isdir), dirname.c_str(),
+      tokens.c_str(), voices.c_str(), vocoder.c_str(), acoustic.c_str(),
+      model.c_str(), enc.c_str(), dec.c_str(), lexicon.c_str(), data_dir.c_str());
+
   SherpaOnnxOfflineTtsConfig cfg;
   std::memset(&cfg, 0, sizeof(cfg));
   cfg.model.num_threads = num_threads;
@@ -537,9 +569,11 @@ inline TtsHandle create_tts(
 
   // Advanced (key=value) overrides. `adv` owns the strings until the Create call.
   opts::KeyValues adv{advanced};
+  const char* family = "(none)";
 
   if(icontains(dirname, "zipvoice") || (!enc.empty() && !dec.empty() && !vocoder.empty()))
   {
+    family = "zipvoice";
     cfg.model.zipvoice.tokens = tokens.c_str();
     cfg.model.zipvoice.encoder = enc.c_str();
     cfg.model.zipvoice.decoder = dec.c_str();
@@ -551,6 +585,7 @@ inline TtsHandle create_tts(
   }
   else if(icontains(dirname, "supertonic"))
   {
+    family = "supertonic";
     // Named locals: the c_str() must outlive the Create* call below.
     static thread_local std::string dp, te, ve, tj, ui, vs;
     dp = find_in_dir(d, {"duration"});
@@ -572,6 +607,7 @@ inline TtsHandle create_tts(
   }
   else if(icontains(dirname, "pocket"))
   {
+    family = "pocket";
     static thread_local std::string lf, lm, tc, vj, ts;
     lf = find_in_dir(d, {"lm_flow"});
     lm = find_in_dir(d, {"lm_main"});
@@ -590,6 +626,7 @@ inline TtsHandle create_tts(
   }
   else if(!voices.empty() && (icontains(dirname, "kitten") || icontains(model, "kitten")))
   {
+    family = "kitten";
     cfg.model.kitten.model = model.c_str();
     cfg.model.kitten.voices = voices.c_str();
     cfg.model.kitten.tokens = tokens.c_str();
@@ -600,6 +637,7 @@ inline TtsHandle create_tts(
   }
   else if(!voices.empty())
   {
+    family = "kokoro";
     // Kokoro (model.onnx + voices.bin + tokens [+ espeak-ng-data]).
     cfg.model.kokoro.model = model.c_str();
     cfg.model.kokoro.voices = voices.c_str();
@@ -611,6 +649,7 @@ inline TtsHandle create_tts(
   }
   else if(!vocoder.empty())
   {
+    family = "matcha";
     // Matcha: an acoustic model + a separate vocoder (vocos / hifigan). The
     // acoustic file may be named acoustic / matcha / model-steps-*; fall back to
     // the first non-vocoder .onnx (`model`) when no explicit name matched.
@@ -629,6 +668,7 @@ inline TtsHandle create_tts(
   }
   else if(!model.empty())
   {
+    family = "vits";
     // VITS (single model.onnx + tokens [+ lexicon or espeak-ng-data]).
     cfg.model.vits.model = model.c_str();
     cfg.model.vits.tokens = tokens.c_str();
@@ -645,6 +685,8 @@ inline TtsHandle create_tts(
   }
   else
   {
+    SHERPA_DBG("[sherpa] TTS: no family matched (no valid model files found) -> "
+               "returning empty handle, object stays unavailable\n");
     return {};
   }
 
@@ -653,7 +695,10 @@ inline TtsHandle create_tts(
   adv.apply_cstr("rule_fars", cfg.rule_fars);
   adv.apply_int("max_num_sentences", cfg.max_num_sentences);
 
-  return TtsHandle{L.SherpaOnnxCreateOfflineTts(&cfg)};
+  SHERPA_DBG("[sherpa] TTS family='%s' -> SherpaOnnxCreateOfflineTts...\n", family);
+  TtsHandle h{L.SherpaOnnxCreateOfflineTts(&cfg)};
+  SHERPA_DBG("[sherpa] TTS create %s (family='%s')\n", h ? "OK" : "FAILED", family);
+  return h;
 }
 
 }
