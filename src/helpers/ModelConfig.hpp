@@ -107,35 +107,79 @@ inline OfflineRecognizerHandle create_offline_recognizer(
   cfg.model_config.provider = "cpu";
   cfg.decoding_method = dec_method.c_str();
 
+  // Extra files for multi-part architectures (moonshine).
+  std::string preproc = find_in_dir(d, {"preprocess"});
+  std::string uncached = find_in_dir(d, {"uncached"});
+  std::string cached = find_in_dir(d, {"cached"});
+  std::string mencoder = enc.empty() ? find_in_dir(d, {"encode"}) : enc;
+  auto has = [&](std::string_view w) {
+    return icontains(any, w) || icontains(dirname, w);
+  };
+
   if(!enc.empty() && !dec.empty() && !joiner.empty())
   {
     cfg.model_config.transducer.encoder = enc.c_str();
     cfg.model_config.transducer.decoder = dec.c_str();
     cfg.model_config.transducer.joiner = joiner.c_str();
   }
+  else if(has("moonshine") || (!preproc.empty() && !uncached.empty() && !cached.empty()))
+  {
+    cfg.model_config.moonshine.preprocessor = preproc.c_str();
+    cfg.model_config.moonshine.encoder = mencoder.c_str();
+    cfg.model_config.moonshine.uncached_decoder = uncached.c_str();
+    cfg.model_config.moonshine.cached_decoder = cached.c_str();
+  }
   else if(!enc.empty() && !dec.empty()
-          && (icontains(enc, "whisper") || icontains(dirname, "whisper")))
+          && (icontains(enc, "whisper") || has("whisper")))
   {
     cfg.model_config.whisper.encoder = enc.c_str();
     cfg.model_config.whisper.decoder = dec.c_str();
   }
-  else if(icontains(any, "paraformer") || icontains(dirname, "paraformer"))
+  else if(!enc.empty() && !dec.empty() && (has("firered") || has("fire_red") || has("fire-red")))
+  {
+    cfg.model_config.fire_red_asr.encoder = enc.c_str();
+    cfg.model_config.fire_red_asr.decoder = dec.c_str();
+  }
+  else if(!enc.empty() && !dec.empty() && has("canary"))
+  {
+    cfg.model_config.canary.encoder = enc.c_str();
+    cfg.model_config.canary.decoder = dec.c_str();
+    cfg.model_config.canary.use_pnc = 1;
+  }
+  else if(has("paraformer"))
   {
     cfg.model_config.paraformer.model = any.c_str();
   }
-  else if(icontains(any, "sense") || icontains(dirname, "sense"))
+  else if(has("sense"))
   {
     cfg.model_config.sense_voice.model = any.c_str();
     cfg.model_config.sense_voice.use_itn = 1;
   }
-  else if(icontains(any, "ctc") || icontains(any, "nemo")
-          || icontains(dirname, "ctc") || icontains(dirname, "nemo"))
+  else if(has("telespeech"))
   {
+    cfg.model_config.telespeech_ctc = any.c_str();
+  }
+  else if(has("wenet"))
+  {
+    cfg.model_config.wenet_ctc.model = any.c_str();
+  }
+  else if(has("dolphin"))
+  {
+    cfg.model_config.dolphin.model = any.c_str();
+  }
+  else if(has("zipformer") && has("ctc"))
+  {
+    cfg.model_config.zipformer_ctc.model = any.c_str();
+  }
+  else if(has("nemo") || has("ctc"))
+  {
+    // Generic CTC without a more specific match: NeMo enc-dec CTC is the norm.
     cfg.model_config.nemo_ctc.model = any.c_str();
   }
   else if(!any.empty())
   {
-    // Last resort: try SenseVoice (multi-lingual, common).
+    // Last resort: SenseVoice (multi-lingual, common). Use the Type override or
+    // point the model dir precisely for the exotic families (qwen3/cohere/tdnn/...).
     cfg.model_config.sense_voice.model = any.c_str();
     cfg.model_config.sense_voice.use_itn = 1;
   }
