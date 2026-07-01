@@ -1,5 +1,12 @@
 cmake_minimum_required(VERSION 3.24 FATAL_ERROR)
 
+# Meaningless on WebAssembly: the objects dlopen a native sherpa-onnx .so at run
+# time, which wasm cannot do. Bail out early -- score has a wasm lane that globs
+# src/addons/*, and standalone has no wasm back-end. Mirrors score-addon-onnx.
+if(EMSCRIPTEN)
+  return()
+endif()
+
 # C is enabled because the vendored dlopen helper and the sherpa C header are C.
 project(sherpa_plugins LANGUAGES C CXX)
 
@@ -40,7 +47,21 @@ endif()
 # (the runtime libs to bundle next to each standalone module).
 include(cmake/sherpa-onnx.cmake)
 
+# General score setup (warning flags, PCH, sanitizer wiring, ...). Only defined
+# inside a score build tree; a no-op standalone. Called before avnd_addon_init,
+# mirroring score-addon-onnx / score-addon-cv.
+if(COMMAND score_common_setup)
+  score_common_setup()
+endif()
+
 avnd_addon_init(NAME sherpa_plugins)
+
+# Compile the base plugin target at C++23. In a score build avnd folds the object
+# TUs into this single plugin target; score already builds at >= C++23, but set it
+# explicitly so nothing falls back to the compiler default (C++17) -- mirrors
+# score-addon-onnx. The per-object standalone back-ends get C++23 from Avendish,
+# and sherpa_plugins_deps carries it (and the includes) via DEPENDENCIES.
+target_compile_features(sherpa_plugins PUBLIC cxx_std_23)
 
 # One INTERFACE target shared by every object: our src/ include dir + the sherpa
 # headers. Passed via DEPENDENCIES so it reaches whatever compiles each object
