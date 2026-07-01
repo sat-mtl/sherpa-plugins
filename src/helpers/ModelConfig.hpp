@@ -84,7 +84,8 @@ inline std::string file_if_exists(const fs::path& dir, std::string_view name)
 // ---------------------------------------------------------------------------
 inline OfflineRecognizerHandle create_offline_recognizer(
     std::string_view dir, int num_threads, std::string_view decoding,
-    const char* provider = "cpu", std::string_view advanced = {})
+    const char* provider = "cpu", std::string_view advanced = {},
+    std::string_view model_type = {})
 {
   const auto& L = SherpaLoader::instance();
   fs::path d{dir};
@@ -118,76 +119,188 @@ inline OfflineRecognizerHandle create_offline_recognizer(
     return icontains(any, w) || icontains(dirname, w);
   };
 
-  if(!enc.empty() && !dec.empty() && !joiner.empty())
+  // Populate the config for an explicit sherpa model-type name; returns false if
+  // the files that family needs are absent. Covers every offline family exposed
+  // by the C API EXCEPT funasr_nano (an LLM pipeline needing a dedicated
+  // multi-file config -- reach that one via sherpa's own tooling).
+  auto set_family = [&](std::string_view t) -> bool {
+    if(t == "transducer")
+    {
+      if(enc.empty() || dec.empty() || joiner.empty())
+        return false;
+      cfg.model_config.transducer.encoder = enc.c_str();
+      cfg.model_config.transducer.decoder = dec.c_str();
+      cfg.model_config.transducer.joiner = joiner.c_str();
+    }
+    else if(t == "whisper")
+    {
+      if(enc.empty() || dec.empty())
+        return false;
+      cfg.model_config.whisper.encoder = enc.c_str();
+      cfg.model_config.whisper.decoder = dec.c_str();
+    }
+    else if(t == "fire_red_asr" || t == "fire_red" || t == "firered")
+    {
+      if(enc.empty() || dec.empty())
+        return false;
+      cfg.model_config.fire_red_asr.encoder = enc.c_str();
+      cfg.model_config.fire_red_asr.decoder = dec.c_str();
+    }
+    else if(t == "canary")
+    {
+      if(enc.empty() || dec.empty())
+        return false;
+      cfg.model_config.canary.encoder = enc.c_str();
+      cfg.model_config.canary.decoder = dec.c_str();
+      cfg.model_config.canary.use_pnc = 1;
+    }
+    else if(t == "cohere" || t == "cohere_transcribe")
+    {
+      if(enc.empty() || dec.empty())
+        return false;
+      cfg.model_config.cohere_transcribe.encoder = enc.c_str();
+      cfg.model_config.cohere_transcribe.decoder = dec.c_str();
+    }
+    else if(t == "moonshine")
+    {
+      if(preproc.empty())
+        return false;
+      cfg.model_config.moonshine.preprocessor = preproc.c_str();
+      cfg.model_config.moonshine.encoder = mencoder.c_str();
+      cfg.model_config.moonshine.uncached_decoder = uncached.c_str();
+      cfg.model_config.moonshine.cached_decoder = cached.c_str();
+    }
+    else if(any.empty())
+      return false;
+    else if(t == "paraformer")
+      cfg.model_config.paraformer.model = any.c_str();
+    else if(t == "sense_voice" || t == "sensevoice" || t == "sense")
+    {
+      cfg.model_config.sense_voice.model = any.c_str();
+      cfg.model_config.sense_voice.use_itn = 1;
+    }
+    else if(t == "telespeech" || t == "telespeech_ctc")
+      cfg.model_config.telespeech_ctc = any.c_str();
+    else if(t == "wenet_ctc" || t == "wenet")
+      cfg.model_config.wenet_ctc.model = any.c_str();
+    else if(t == "dolphin")
+      cfg.model_config.dolphin.model = any.c_str();
+    else if(t == "zipformer_ctc")
+      cfg.model_config.zipformer_ctc.model = any.c_str();
+    else if(t == "nemo_ctc" || t == "nemo")
+      cfg.model_config.nemo_ctc.model = any.c_str();
+    else if(t == "tdnn" || t == "yesno")
+      cfg.model_config.tdnn.model = any.c_str();
+    else if(t == "omnilingual")
+      cfg.model_config.omnilingual.model = any.c_str();
+    else if(t == "medasr")
+      cfg.model_config.medasr.model = any.c_str();
+    else if(t == "fire_red_asr_ctc" || t == "firered_ctc")
+      cfg.model_config.fire_red_asr_ctc.model = any.c_str();
+    else
+      return false;
+    return true;
+  };
+
+  // An explicit "Model type" forces the family; empty -> filename auto-detect.
+  const std::string mt = to_lower(std::string{model_type});
+  const bool forced = !mt.empty() && set_family(mt);
+
+  if(!forced)
   {
-    cfg.model_config.transducer.encoder = enc.c_str();
-    cfg.model_config.transducer.decoder = dec.c_str();
-    cfg.model_config.transducer.joiner = joiner.c_str();
-  }
-  else if(has("moonshine") || (!preproc.empty() && !uncached.empty() && !cached.empty()))
-  {
-    cfg.model_config.moonshine.preprocessor = preproc.c_str();
-    cfg.model_config.moonshine.encoder = mencoder.c_str();
-    cfg.model_config.moonshine.uncached_decoder = uncached.c_str();
-    cfg.model_config.moonshine.cached_decoder = cached.c_str();
-  }
-  else if(!enc.empty() && !dec.empty()
-          && (icontains(enc, "whisper") || has("whisper")))
-  {
-    cfg.model_config.whisper.encoder = enc.c_str();
-    cfg.model_config.whisper.decoder = dec.c_str();
-  }
-  else if(!enc.empty() && !dec.empty() && (has("firered") || has("fire_red") || has("fire-red")))
-  {
-    cfg.model_config.fire_red_asr.encoder = enc.c_str();
-    cfg.model_config.fire_red_asr.decoder = dec.c_str();
-  }
-  else if(!enc.empty() && !dec.empty() && has("canary"))
-  {
-    cfg.model_config.canary.encoder = enc.c_str();
-    cfg.model_config.canary.decoder = dec.c_str();
-    cfg.model_config.canary.use_pnc = 1;
-  }
-  else if(has("paraformer"))
-  {
-    cfg.model_config.paraformer.model = any.c_str();
-  }
-  else if(has("sense"))
-  {
-    cfg.model_config.sense_voice.model = any.c_str();
-    cfg.model_config.sense_voice.use_itn = 1;
-  }
-  else if(has("telespeech"))
-  {
-    cfg.model_config.telespeech_ctc = any.c_str();
-  }
-  else if(has("wenet"))
-  {
-    cfg.model_config.wenet_ctc.model = any.c_str();
-  }
-  else if(has("dolphin"))
-  {
-    cfg.model_config.dolphin.model = any.c_str();
-  }
-  else if(has("zipformer") && has("ctc"))
-  {
-    cfg.model_config.zipformer_ctc.model = any.c_str();
-  }
-  else if(has("nemo") || has("ctc"))
-  {
-    // Generic CTC without a more specific match: NeMo enc-dec CTC is the norm.
-    cfg.model_config.nemo_ctc.model = any.c_str();
-  }
-  else if(!any.empty())
-  {
-    // Last resort: SenseVoice (multi-lingual, common). Use the Type override or
-    // point the model dir precisely for the exotic families (qwen3/cohere/tdnn/...).
-    cfg.model_config.sense_voice.model = any.c_str();
-    cfg.model_config.sense_voice.use_itn = 1;
-  }
-  else
-  {
-    return {};
+    if(!enc.empty() && !dec.empty() && !joiner.empty())
+    {
+      cfg.model_config.transducer.encoder = enc.c_str();
+      cfg.model_config.transducer.decoder = dec.c_str();
+      cfg.model_config.transducer.joiner = joiner.c_str();
+    }
+    else if(has("moonshine") || (!preproc.empty() && !uncached.empty() && !cached.empty()))
+    {
+      cfg.model_config.moonshine.preprocessor = preproc.c_str();
+      cfg.model_config.moonshine.encoder = mencoder.c_str();
+      cfg.model_config.moonshine.uncached_decoder = uncached.c_str();
+      cfg.model_config.moonshine.cached_decoder = cached.c_str();
+    }
+    else if(!enc.empty() && !dec.empty()
+            && (icontains(enc, "whisper") || has("whisper")))
+    {
+      cfg.model_config.whisper.encoder = enc.c_str();
+      cfg.model_config.whisper.decoder = dec.c_str();
+    }
+    else if(!enc.empty() && !dec.empty() && (has("firered") || has("fire_red") || has("fire-red")))
+    {
+      cfg.model_config.fire_red_asr.encoder = enc.c_str();
+      cfg.model_config.fire_red_asr.decoder = dec.c_str();
+    }
+    else if(!enc.empty() && !dec.empty() && has("canary"))
+    {
+      cfg.model_config.canary.encoder = enc.c_str();
+      cfg.model_config.canary.decoder = dec.c_str();
+      cfg.model_config.canary.use_pnc = 1;
+    }
+    else if(!enc.empty() && !dec.empty() && has("cohere"))
+    {
+      cfg.model_config.cohere_transcribe.encoder = enc.c_str();
+      cfg.model_config.cohere_transcribe.decoder = dec.c_str();
+    }
+    else if(has("paraformer"))
+    {
+      cfg.model_config.paraformer.model = any.c_str();
+    }
+    else if(has("sense"))
+    {
+      cfg.model_config.sense_voice.model = any.c_str();
+      cfg.model_config.sense_voice.use_itn = 1;
+    }
+    else if(has("telespeech"))
+    {
+      cfg.model_config.telespeech_ctc = any.c_str();
+    }
+    else if(has("wenet"))
+    {
+      cfg.model_config.wenet_ctc.model = any.c_str();
+    }
+    else if(has("dolphin"))
+    {
+      cfg.model_config.dolphin.model = any.c_str();
+    }
+    else if(has("tdnn") || has("yesno"))
+    {
+      cfg.model_config.tdnn.model = any.c_str();
+    }
+    else if(has("omnilingual"))
+    {
+      cfg.model_config.omnilingual.model = any.c_str();
+    }
+    else if(has("medasr"))
+    {
+      cfg.model_config.medasr.model = any.c_str();
+    }
+    else if(has("firered") || has("fire_red") || has("fire-red"))
+    {
+      // enc/dec FireRed matched above; a single-model FireRed is the CTC variant.
+      cfg.model_config.fire_red_asr_ctc.model = any.c_str();
+    }
+    else if(has("zipformer") && has("ctc"))
+    {
+      cfg.model_config.zipformer_ctc.model = any.c_str();
+    }
+    else if(has("nemo") || has("ctc"))
+    {
+      // Generic CTC without a more specific match: NeMo enc-dec CTC is the norm.
+      cfg.model_config.nemo_ctc.model = any.c_str();
+    }
+    else if(!any.empty())
+    {
+      // Last resort: SenseVoice (multi-lingual, common). Use the "Model type"
+      // override to force any family the filename heuristics miss.
+      cfg.model_config.sense_voice.model = any.c_str();
+      cfg.model_config.sense_voice.use_itn = 1;
+    }
+    else
+    {
+      return {};
+    }
   }
 
   // Advanced (key=value) overrides. `adv` owns the strings until the Create call.

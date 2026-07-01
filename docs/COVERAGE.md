@@ -23,25 +23,44 @@ like `ImageProcessor` fronting many vision models).
 
 Every `SherpaOnnxCreate*` entry point is asserted resolved by `tests/test_coverage.cpp`.
 
-## Model families
+## Model families & validation status
 
-| Object | Auto-detected families | Notes |
-|---|---|---|
-| offline ASR | transducer, paraformer, whisper, sense-voice, moonshine, fire-red, canary, nemo-ctc, zipformer-ctc, wenet-ctc, telespeech, dolphin | exotic (qwen3/cohere/tdnn/med/omni/funasr) reachable by pointing the Model dir precisely |
-| online ASR | transducer, paraformer, zipformer2-ctc, nemo-ctc, t-one-ctc | |
-| unified ASR (`sherpa_asr`) | all of the above (both tables) | `Mode` Auto/Streaming/Batch; Batch pairs a non-streaming model with a VAD (2nd port) |
-| TTS | vits, matcha, kokoro, kitten, zipvoice, pocket, supertonic | |
-| VAD | silero, ten-vad | |
-| text | ct-transformer (offline punct), cnn-bilstm (online punct), catt (diacritization) | via `Type` override or dir name |
-| audio_labels | zipformer / CED (tagging), whisper (LID) | via `Type` override |
-| denoiser | gtcrn, dpdfnet | `Mode` Auto/Offline/Online |
-| speaker | 3d-speaker / nemo / wespeaker embeddings | |
-| keyword_spotter | transducer KWS | keywords via file or inline lineedit |
-| diarization | pyannote segmentation + speaker embedding | |
-| source_separation | spleeter, uvr | |
+Two independent axes, enumerated against the pinned **sherpa-onnx 1.13.3** C-API:
 
-Detection is heuristic (filenames + dir name); every multi-family object also has a
-`Type`/`Mode` override enum so any family is reachable even when auto-detect misses.
+- **Code** — can an object reach the family? Filename auto-detect, plus a
+  `Model type` (ASR) / `Type` (text, labels) / `Mode` (denoiser) override so any
+  family is reachable even when the heuristic misses.
+- **CI** — is a real model of that family run through inference in
+  `.github/workflows/tests.yml`?
+
+**CI validates one model per feature** (the "CI" column). Every other supported
+family shares the *same* code path but is not downloaded in CI — a deliberate
+bandwidth choice, not a code gap. Expanding is just adding a model to `tests.yml`.
+
+| Feature | Families reachable in code | CI-validated | Not wired |
+|---|---|---|---|
+| **Offline ASR** (18 in API) | transducer, paraformer, whisper, sense-voice, moonshine, fire-red-asr, canary, telespeech, wenet-ctc, dolphin, zipformer-ctc, nemo-ctc, **tdnn, omnilingual, medasr, fire-red-ctc, cohere** — all auto-detected; force any with the **`Model type`** port | whisper (whisper-tiny.en) | **funasr-nano** (LLM multi-file pipeline: encoder-adaptor + llm + embedding + tokenizer + prompts — use sherpa's own tooling) |
+| **Online ASR** (5) | transducer, paraformer, zipformer2-ctc, nemo-ctc, t-one-ctc — all | transducer (streaming-zipformer) | — |
+| **TTS** (7) | vits, matcha, kokoro, kitten, zipvoice, pocket, supertonic — all | vits (piper-amy) | — |
+| **VAD** (2) | silero, ten-vad | silero | — |
+| **Text** (3) | offline-punct (ct-transformer), online-punct (cnn-bilstm), diacritization (catt) — `Type` | offline-punct | — |
+| **Audio labels** | tagging (zipformer, CED), language-ID (whisper) — `Type` | zipformer tagging | — |
+| **Denoiser** (2) | gtcrn, dpdfnet — `Mode` | gtcrn | — |
+| **Source sep** (2) | spleeter, uvr | spleeter | — |
+| **Speaker** | any embedding model (3d-speaker / wespeaker / nemo — one API) | 3d-speaker | — |
+| **KWS** | transducer KWS | gigaspeech KWS | — |
+| **Diarization** | pyannote segmentation + speaker embedding | pyannote + 3d-speaker | — |
+
+The **unified `sherpa_asr`** reaches every offline + online family above (`Mode`
+Auto/Streaming/Batch; Batch pairs a non-streaming model with a VAD via the 2nd port).
+
+**`Model type` override values** (offline ASR / unified ASR, empty = auto-detect):
+`transducer, paraformer, whisper, sense_voice, moonshine, fire_red_asr, canary,
+cohere, telespeech, wenet_ctc, dolphin, zipformer_ctc, nemo_ctc, tdnn, omnilingual,
+medasr, fire_red_asr_ctc`.
+
+So: **code coverage is complete** (every 1.13.3 family reachable except the
+funasr-nano LLM pipeline); **CI coverage is one representative model per feature**.
 
 ## Options
 

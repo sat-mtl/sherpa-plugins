@@ -82,6 +82,7 @@ public:
     halp::enum_t<Decoding, "Decoding"> decoding;
     halp::enum_t<Provider, "Provider"> provider;
     halp::hslider_i32<"Threads", halp::range{1., 16., 1.}> threads;
+    halp::lineedit<"Model type", ""> model_type; // force a family; empty = auto
     halp::lineedit<"Advanced", ""> advanced;
   } inputs;
 
@@ -119,6 +120,7 @@ public:
     std::string want_model;
     std::string want_vad;
     std::string advanced;
+    std::string model_type;
 
     Engine engine = Engine::None;
     std::shared_ptr<OnlineRecognizerHandle> online;
@@ -218,6 +220,7 @@ inline void Asr::dispatch()
   job.want_model = m_requested_model;
   job.want_vad = m_requested_vad;
   job.advanced = inputs.advanced.value;
+  job.model_type = inputs.model_type.value;
   job.reload = m_reload;
   job.engine = m_engine;
   job.online = m_online;
@@ -269,7 +272,7 @@ inline std::function<void(Asr&)> Asr::worker::work(std::shared_ptr<Job> job)
     {
       auto rec = model::create_offline_recognizer(
           job->want_model, job->num_threads, decoding_str(job->decoding),
-          provider_str(job->provider), job->advanced);
+          provider_str(job->provider), job->advanced, job->model_type);
       if(rec)
       {
         job->offline = std::make_shared<OfflineRecognizerHandle>(std::move(rec));
