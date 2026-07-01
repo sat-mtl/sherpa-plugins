@@ -50,7 +50,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: models
-          key: sherpa-test-models-v1
+          key: sherpa-test-models-v2
 
       - name: Download test models (best-effort)
         if: steps.models-cache.outputs.cache-hit != 'true'
@@ -62,7 +62,27 @@ jobs:
           get "$A/sherpa-onnx-streaming-zipformer-en-20M-2023-02-17.tar.bz2"
           get "$A/sherpa-onnx-whisper-tiny.en.tar.bz2"
           get "$T/vits-piper-en_US-amy-low.tar.bz2"
-          curl -fsSL "$A/silero_vad.onnx" -o silero_vad.onnx || echo "WARN: could not fetch silero_vad.onnx"
+          curl -fsSL "$A/silero_vad.onnx" -o silero_vad.onnx || echo "WARN silero_vad.onnx"
+          # --- models for the extended features (best-effort; verify tags/names) ---
+          P="https://github.com/k2-fsa/sherpa-onnx/releases/download/punctuation-models"
+          AT="https://github.com/k2-fsa/sherpa-onnx/releases/download/audio-tagging-models"
+          K="https://github.com/k2-fsa/sherpa-onnx/releases/download/kws-models"
+          SS="https://github.com/k2-fsa/sherpa-onnx/releases/download/source-separation-models"
+          SR="https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models"
+          SE="https://github.com/k2-fsa/sherpa-onnx/releases/download/speech-enhancement-models"
+          SG="https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-segmentation-models"
+          getf() { mkdir -p "$2"; curl -fsSL "$1" -o "$2/$(basename "$1")" || echo "WARN $1"; }
+          get "$P/sherpa-onnx-punct-ct-transformer-zh-en-vocab272727-2024-04-12.tar.bz2"
+          get "$AT/sherpa-onnx-zipformer-audio-tagging-2024-04-09.tar.bz2"
+          get "$K/sherpa-onnx-kws-zipformer-gigaspeech-3.3M-2024-01-01.tar.bz2"
+          get "$SS/sherpa-onnx-spleeter-2stems-fp16.tar.bz2"
+          getf "$SR/3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx" spk
+          getf "$SE/gtcrn_simple.onnx" denoise
+          get "$SG/sherpa-onnx-pyannote-segmentation-3-0.tar.bz2"
+          # diarization needs segmentation + a speaker embedding model in one dir
+          if [ -d sherpa-onnx-pyannote-segmentation-3-0 ]; then
+            cp spk/*.onnx sherpa-onnx-pyannote-segmentation-3-0/ 2>/dev/null || true
+          fi
 
       - name: Export model env vars (only for what downloaded)
         run: |
@@ -76,6 +96,17 @@ jobs:
           [ -f "silero_vad.onnx" ] && echo "SHERPA_TEST_VAD_MODEL=$PWD"    >> "$GITHUB_ENV"
           w="$(ls "$on"/test_wavs/*.wav 2>/dev/null | head -1)"
           [ -n "$w" ] && echo "SHERPA_TEST_WAV=$PWD/$w" >> "$GITHUB_ENV"
+          # extended features
+          exp() { [ -d "$2" ] && echo "$1=$PWD/$2" >> "$GITHUB_ENV"; }
+          exp SHERPA_TEST_TEXT_MODEL         sherpa-onnx-punct-ct-transformer-zh-en-vocab272727-2024-04-12
+          exp SHERPA_TEST_AUDIO_LABELS_MODEL sherpa-onnx-zipformer-audio-tagging-2024-04-09
+          exp SHERPA_TEST_KWS_MODEL          sherpa-onnx-kws-zipformer-gigaspeech-3.3M-2024-01-01
+          exp SHERPA_TEST_SOURCESEP_MODEL    sherpa-onnx-spleeter-2stems-fp16
+          ls spk/*.onnx     >/dev/null 2>&1 && echo "SHERPA_TEST_SPEAKER_MODEL=$PWD/spk" >> "$GITHUB_ENV"
+          ls denoise/*.onnx >/dev/null 2>&1 && echo "SHERPA_TEST_DENOISER_MODEL=$PWD/denoise" >> "$GITHUB_ENV"
+          if ls sherpa-onnx-pyannote-segmentation-3-0/*3dspeaker*.onnx >/dev/null 2>&1; then
+            echo "SHERPA_TEST_DIARIZATION_MODEL=$PWD/sherpa-onnx-pyannote-segmentation-3-0" >> "$GITHUB_ENV"
+          fi
           echo "Model env:"; env | grep '^SHERPA_TEST_' || echo "(none downloaded)"
 
       - name: Configure
