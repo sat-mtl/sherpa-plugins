@@ -99,3 +99,39 @@ if(NOT AVND_ADDON_SCORE AND COMMAND avnd_addon_package)
     BACKENDS max touchdesigner godot
     SUPPORT ${SHERPA_SUPPORT_FILES})
 endif()
+
+# --- Tests (Catch2) -------------------------------------------------------------
+# Structural tests run anywhere; the per-object workflow tests validate real
+# ASR/VAD/TTS when the runtime library + a model are available (env vars, see the
+# test sources and .github/workflows/tests.yml). Reuses Avendish's avnd_common_setup
+# for the halp include/standard, so it's only wired for standalone builds.
+option(SHERPA_PLUGINS_TESTS "Build the Catch2 tests" OFF)
+if(SHERPA_PLUGINS_TESTS AND COMMAND avnd_common_setup)
+  include(CTest)
+  if(NOT TARGET Catch2::Catch2WithMain)
+    find_package(Catch2 3 QUIET)
+  endif()
+  if(NOT TARGET Catch2::Catch2WithMain)
+    include(FetchContent)
+    FetchContent_Declare(Catch2
+      GIT_REPOSITORY https://github.com/catchorg/Catch2.git
+      GIT_TAG v3.7.1)
+    FetchContent_MakeAvailable(Catch2)
+  endif()
+
+  function(sherpa_test name)
+    add_executable(${name} "tests/${name}.cpp")
+    avnd_common_setup("" ${name})
+    target_link_libraries(${name} PRIVATE Catch2::Catch2WithMain sherpa_plugins_deps)
+    add_test(NAME ${name} COMMAND ${name})
+    # Label so `ctest -L sherpa_plugins` runs only these, not the per-backend
+    # smoke tests (e.g. godot:NODE) that avnd_addon_object also registers.
+    set_tests_properties(${name} PROPERTIES LABELS "sherpa_plugins")
+  endfunction()
+
+  sherpa_test(test_structural)
+  sherpa_test(test_asr_offline)
+  sherpa_test(test_asr_online)
+  sherpa_test(test_vad)
+  sherpa_test(test_tts)
+endif()

@@ -1,0 +1,80 @@
+name: Tests
+on:
+  pull_request:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain + Boost
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            g++-14 cmake ninja-build libboost-dev catch2 curl
+
+      - name: Fetch prebuilt sherpa-onnx runtime library
+        run: |
+          mkdir -p sherpa-rt && cd sherpa-rt
+          url="https://github.com/sat-mtl/sherpa-plugins/releases/download/prebuilt-v1.13.3/sherpa-onnx-cabi-linux-x64.tar.gz"
+          curl -fsSL "$url" -o pkg.tgz
+          tar xzf pkg.tgz && rm pkg.tgz
+          echo "SHERPA_RT=$PWD" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=$PWD/lib:${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
+
+      - name: Cache test models
+        id: models-cache
+        uses: actions/cache@v4
+        with:
+          path: models
+          key: sherpa-test-models-v1
+
+      - name: Download test models (best-effort)
+        if: steps.models-cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p models && cd models
+          A="https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models"
+          T="https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models"
+          get() { curl -fsSL "$1" -o m.tar.bz2 && tar xf m.tar.bz2 && rm -f m.tar.bz2 || echo "WARN: could not fetch $1"; }
+          # Online ASR (streaming transducer, bundles test_wavs); offline ASR (whisper
+          # tiny); TTS (piper vits); VAD (silero). Any that 404 just cause a skip.
+          get "$A/sherpa-onnx-streaming-zipformer-en-20M-2023-02-17.tar.bz2"
+          get "$A/sherpa-onnx-whisper-tiny.en.tar.bz2"
+          get "$T/vits-piper-en_US-amy-low.tar.bz2"
+          curl -fsSL "$A/silero_vad.onnx" -o silero_vad.onnx || echo "WARN: could not fetch silero_vad.onnx"
+
+      - name: Export model env vars (only for what downloaded)
+        run: |
+          cd models
+          on="sherpa-onnx-streaming-zipformer-en-20M-2023-02-17"
+          off="sherpa-onnx-whisper-tiny.en"
+          tts="vits-piper-en_US-amy-low"
+          [ -d "$on" ]  && echo "SHERPA_TEST_ASR_ONLINE_MODEL=$PWD/$on"  >> "$GITHUB_ENV"
+          [ -d "$off" ] && echo "SHERPA_TEST_ASR_OFFLINE_MODEL=$PWD/$off" >> "$GITHUB_ENV"
+          [ -d "$tts" ] && echo "SHERPA_TEST_TTS_MODEL=$PWD/$tts"          >> "$GITHUB_ENV"
+          [ -f "silero_vad.onnx" ] && echo "SHERPA_TEST_VAD_MODEL=$PWD"    >> "$GITHUB_ENV"
+          w="$(ls "$on"/test_wavs/*.wav 2>/dev/null | head -1)"
+          [ -n "$w" ] && echo "SHERPA_TEST_WAV=$w" >> "$GITHUB_ENV"
+          echo "Model env:"; env | grep '^SHERPA_TEST_' || echo "(none downloaded)"
+
+      - name: Configure
+        env: { CC: gcc-14, CXX: g++-14 }
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DSHERPA_PLUGINS_TESTS=ON \
+            -DSHERPA_ONNX_DIR="${SHERPA_RT}"
+
+      - name: Build tests
+        run: cmake --build build --target
+             test_structural test_asr_offline test_asr_online test_vad test_tts
+
+      - name: Run tests
+        working-directory: build
+        run: ctest -L sherpa_plugins --output-on-failure --no-tests=error
