@@ -14,11 +14,27 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install toolchain + Boost
+      - name: Install toolchain
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            g++-14 cmake ninja-build libboost-dev catch2 curl
+            g++-14 cmake ninja-build catch2 curl xz-utils
+
+      # Avendish requires Boost >= 1.87; ubuntu-24.04's apt Boost is 1.83, so
+      # provision headers ourselves (like the ossia/actions workflows do).
+      - name: Cache Boost
+        id: boost-cache
+        uses: actions/cache@v4
+        with:
+          path: boost-1.88.0
+          key: boost-1.88.0-headers
+      - name: Provision Boost
+        if: steps.boost-cache.outputs.cache-hit != 'true'
+        run: |
+          curl -fsSL "https://github.com/boostorg/boost/releases/download/boost-1.88.0/boost-1.88.0-b2-nodocs.tar.xz" -o boost.tar.xz
+          tar xf boost.tar.xz && rm -f boost.tar.xz
+      - name: Set BOOST_ROOT
+        run: echo "BOOST_ROOT=$PWD/boost-1.88.0" >> "$GITHUB_ENV"
 
       - name: Fetch prebuilt sherpa-onnx runtime library
         run: |
@@ -43,8 +59,6 @@ jobs:
           A="https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models"
           T="https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models"
           get() { curl -fsSL "$1" -o m.tar.bz2 && tar xf m.tar.bz2 && rm -f m.tar.bz2 || echo "WARN: could not fetch $1"; }
-          # Online ASR (streaming transducer, bundles test_wavs); offline ASR (whisper
-          # tiny); TTS (piper vits); VAD (silero). Any that 404 just cause a skip.
           get "$A/sherpa-onnx-streaming-zipformer-en-20M-2023-02-17.tar.bz2"
           get "$A/sherpa-onnx-whisper-tiny.en.tar.bz2"
           get "$T/vits-piper-en_US-amy-low.tar.bz2"
@@ -61,7 +75,7 @@ jobs:
           [ -d "$tts" ] && echo "SHERPA_TEST_TTS_MODEL=$PWD/$tts"          >> "$GITHUB_ENV"
           [ -f "silero_vad.onnx" ] && echo "SHERPA_TEST_VAD_MODEL=$PWD"    >> "$GITHUB_ENV"
           w="$(ls "$on"/test_wavs/*.wav 2>/dev/null | head -1)"
-          [ -n "$w" ] && echo "SHERPA_TEST_WAV=$w" >> "$GITHUB_ENV"
+          [ -n "$w" ] && echo "SHERPA_TEST_WAV=$PWD/$w" >> "$GITHUB_ENV"
           echo "Model env:"; env | grep '^SHERPA_TEST_' || echo "(none downloaded)"
 
       - name: Configure
@@ -69,7 +83,10 @@ jobs:
         run: |
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
             -DSHERPA_PLUGINS_TESTS=ON \
-            -DSHERPA_ONNX_DIR="${SHERPA_RT}"
+            -DSHERPA_ONNX_DIR="${SHERPA_RT}" \
+            -DBOOST_ROOT="${BOOST_ROOT}" \
+            -DBoost_NO_BOOST_CMAKE=ON \
+            -DCMAKE_POLICY_DEFAULT_CMP0167=OLD
 
       - name: Build tests
         run: cmake --build build --target
