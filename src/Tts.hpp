@@ -19,6 +19,7 @@
 #include <halp/controls.hpp>
 #include <halp/file_port.hpp>
 #include <halp/meta.hpp>
+#include <halp/soundfile_port.hpp>
 
 #include <atomic>
 #include <cstring>
@@ -46,6 +47,11 @@ public:
     halp::folder_port<"Model"> model;
     halp::hslider_i32<"Speaker", halp::range{0., 512., 0.}> speaker;
     halp::knob_f32<"Speed", halp::range{0.1, 3.0, 1.0}> speed;
+    halp::knob_f32<"Silence", halp::range{0., 2., 0.2}> silence;
+    halp::hslider_i32<"Steps", halp::range{0., 50., 0.}> num_steps;
+    // Zero-shot voice cloning (e.g. zipvoice): a reference clip + its transcript.
+    halp::soundfile_port<"Reference"> reference;
+    halp::lineedit<"Reference text", ""> reference_text;
     halp::enum_t<Provider, "Provider"> provider;
     halp::hslider_i32<"Threads", halp::range{1., 8., 1.}> threads;
   } inputs;
@@ -65,6 +71,11 @@ public:
     float speed = 1.f;
     int num_threads = 1;
     Provider provider = Provider::CPU;
+    float silence = 0.2f;
+    int num_steps = 0;
+    std::vector<float> ref;
+    int ref_rate = 0;
+    std::string ref_text;
     double host_rate = 48000.;
     std::shared_ptr<TtsHandle> tts;
     std::vector<float> out; // synthesized, resampled to host_rate, mono
@@ -149,6 +160,26 @@ inline void Tts::dispatch()
   job.speed = inputs.speed.value;
   job.num_threads = inputs.threads.value;
   job.provider = inputs.provider.value;
+  job.silence = inputs.silence.value;
+  job.num_steps = inputs.num_steps.value;
+  job.ref_text = inputs.reference_text.value;
+  job.ref.clear();
+  {
+    const int rch = inputs.reference.channels();
+    const long long rfr = inputs.reference.frames();
+    if(rch > 0 && rfr > 0)
+    {
+      job.ref_rate = inputs.reference.soundfile.rate;
+      job.ref.reserve(static_cast<std::size_t>(rfr));
+      for(long long i = 0; i < rfr; ++i)
+      {
+        float s = 0.f;
+        for(int c = 0; c < rch; ++c)
+          s += inputs.reference[c][i];
+        job.ref.push_back(rch > 1 ? s / static_cast<float>(rch) : s);
+      }
+    }
+  }
   job.host_rate = m_host_rate;
   job.tts = m_tts;
   m_reload = false;
@@ -177,7 +208,17 @@ inline std::function<void(Tts&)> Tts::worker::work(std::shared_ptr<Job> job)
     std::memset(&cfg, 0, sizeof(cfg));
     cfg.sid = job->sid;
     cfg.speed = job->speed;
-    cfg.silence_scale = 0.2f;
+    cfg.silence_scale = job->silence;
+    if(job->num_steps > 0)
+      cfg.num_steps = job->num_steps;
+    if(!job->ref.empty())
+    {
+      cfg.reference_audio = job->ref.data();
+      cfg.reference_audio_len = static_cast<int32_t>(job->ref.size());
+      cfg.reference_sample_rate = job->ref_rate;
+    }
+    if(!job->ref_text.empty())
+      cfg.reference_text = job->ref_text.c_str();
 
     const auto* audio = L.SherpaOnnxOfflineTtsGenerateWithConfig(
         job->tts->get(), job->text.c_str(), &cfg, nullptr, nullptr);
