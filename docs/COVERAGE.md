@@ -1,6 +1,6 @@
 # Coverage
 
-sherpa-plugins wraps **100% of the sherpa-onnx workflow families** in 11 Avendish
+sherpa-plugins wraps **100% of the sherpa-onnx workflow families** in 12 Avendish
 objects, grouped by input→output signature (so related features share one object,
 like `ImageProcessor` fronting many vision models).
 
@@ -8,7 +8,8 @@ like `ImageProcessor` fronting many vision models).
 
 | Object (`c_name`) | I/O | sherpa-onnx features covered |
 |---|---|---|
-| `sherpa_asr_offline` | audio → text (+meta) | non-streaming ASR |
+| `sherpa_asr` | audio → utterances (+meta) | **unified** streaming + non-streaming ASR (streaming finalizes via endpointing; non-streaming via an internal VAD) |
+| `sherpa_asr_offline` | audio → text (+meta) | non-streaming ASR (push-to-talk) |
 | `sherpa_asr_online` | audio → text (+meta) | streaming ASR |
 | `sherpa_tts` | text → audio | TTS |
 | `sherpa_vad` | audio → speech segments | voice activity detection |
@@ -28,6 +29,7 @@ Every `SherpaOnnxCreate*` entry point is asserted resolved by `tests/test_covera
 |---|---|---|
 | offline ASR | transducer, paraformer, whisper, sense-voice, moonshine, fire-red, canary, nemo-ctc, zipformer-ctc, wenet-ctc, telespeech, dolphin | exotic (qwen3/cohere/tdnn/med/omni/funasr) reachable by pointing the Model dir precisely |
 | online ASR | transducer, paraformer, zipformer2-ctc, nemo-ctc, t-one-ctc | |
+| unified ASR (`sherpa_asr`) | all of the above (both tables) | `Mode` Auto/Streaming/Batch; Batch pairs a non-streaming model with a VAD (2nd port) |
 | TTS | vits, matcha, kokoro, kitten, zipvoice, pocket, supertonic | |
 | VAD | silero, ten-vad | |
 | text | ct-transformer (offline punct), cnn-bilstm (online punct), catt (diacritization) | via `Type` override or dir name |

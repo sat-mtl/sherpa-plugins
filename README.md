@@ -25,15 +25,27 @@ So three layers: the prebuilt sherpa C-API `.so` ← a dlopen loader
 
 ## Objects
 
-| `c_name`             | Class              | Flow                                   |
-|----------------------|--------------------|----------------------------------------|
-| `sherpa_asr_offline` | `OfflineRecognizer`| audio buffer → text (batch, on trigger)|
-| `sherpa_asr_online`  | `OnlineRecognizer` | audio stream → incremental text + endpoint |
-| `sherpa_vad`         | `Vad`              | audio stream → speech-segment events   |
-| `sherpa_tts`         | `Tts`              | text → synthesized audio               |
+| `c_name`                  | Class              | Flow                                        |
+|---------------------------|--------------------|---------------------------------------------|
+| `sherpa_asr`              | `Asr`              | audio stream → utterances (unified streaming + batch) |
+| `sherpa_asr_offline`      | `OfflineRecognizer`| audio buffer → text (batch, on trigger)     |
+| `sherpa_asr_online`       | `OnlineRecognizer` | audio stream → incremental text + endpoint  |
+| `sherpa_vad`              | `Vad`              | audio stream → speech-segment events        |
+| `sherpa_tts`              | `Tts`              | text → synthesized audio                    |
+| `sherpa_text`             | `TextProcessor`    | text → punctuated / diacritized text        |
+| `sherpa_audio_labels`     | `AudioLabels`      | audio → {label, score}[] (tagging · LID)    |
+| `sherpa_denoiser`         | `Denoiser`         | audio → enhanced audio                       |
+| `sherpa_speaker`          | `Speaker`          | audio → embedding + enroll / identify       |
+| `sherpa_keyword_spotter`  | `KeywordSpotter`   | audio stream → keyword events               |
+| `sherpa_diarization`      | `Diarization`      | audio → {start, end, speaker}[]             |
+| `sherpa_source_separation`| `SourceSeparation` | audio → N separated stems                    |
+
+Every object exposes **Provider** (CPU/CUDA/CoreML/DirectML) and **Threads**; the
+ASR / VAD / TTS objects add an **`Advanced`** `key=value` port for the long tail of
+sherpa options (see `docs/COVERAGE.md`).
 
 All inference, model loading and result allocation happen on an Avendish
-**worker** thread — never on the audio/DSP thread. See `src/helpers/Worker.hpp`.
+**worker** thread — never on the audio/DSP thread.
 
 ## Building
 

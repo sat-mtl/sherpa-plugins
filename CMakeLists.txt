@@ -70,6 +70,7 @@ function(sherpa_object c_name class)
     SOURCES "src/${class}.hpp" "src/${class}.cpp")
 endfunction()
 
+sherpa_object(sherpa_asr               Asr)
 sherpa_object(sherpa_asr_offline       OfflineRecognizer)
 sherpa_object(sherpa_asr_online        OnlineRecognizer)
 sherpa_object(sherpa_vad               Vad)
@@ -88,6 +89,7 @@ target_sources(sherpa_plugins PRIVATE
     src/SherpaLoader.hpp
     src/helpers/Handles.hpp
     src/helpers/ModelConfig.hpp
+    src/helpers/Options.hpp
     src/helpers/AudioChunker.hpp)
 
 avnd_addon_finalize(NAME sherpa_plugins
@@ -142,6 +144,7 @@ if(SHERPA_PLUGINS_TESTS AND COMMAND avnd_common_setup)
 
   sherpa_test(test_structural)
   sherpa_test(test_coverage)
+  sherpa_test(test_asr)
   sherpa_test(test_asr_offline)
   sherpa_test(test_asr_online)
   sherpa_test(test_vad)

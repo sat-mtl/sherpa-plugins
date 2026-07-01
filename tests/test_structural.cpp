@@ -3,6 +3,7 @@
 // the Max/Pd C object model) and the RT-safe audio accumulator.
 #include "TestHelpers.hpp"
 
+#include "Asr.hpp"
 #include "AudioLabels.hpp"
 #include "Denoiser.hpp"
 #include "Diarization.hpp"
@@ -26,14 +27,14 @@ using namespace sherpa;
 
 TEMPLATE_TEST_CASE(
     "Objects are nothrow default-constructible (Max/Pd requirement)", "[structural]",
-    OfflineRecognizer, OnlineRecognizer, Vad, Tts, TextProcessor, AudioLabels,
+    Asr, OfflineRecognizer, OnlineRecognizer, Vad, Tts, TextProcessor, AudioLabels,
     Denoiser, Speaker, KeywordSpotter, Diarization, SourceSeparation)
 {
   STATIC_REQUIRE(std::is_nothrow_default_constructible_v<TestType>);
 }
 
 TEMPLATE_TEST_CASE(
-    "Objects expose non-empty metadata", "[structural]", OfflineRecognizer,
+    "Objects expose non-empty metadata", "[structural]", Asr, OfflineRecognizer,
     OnlineRecognizer, Vad, Tts)
 {
   CHECK(std::string_view{TestType::name()}.size() > 0);
