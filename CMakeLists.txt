@@ -137,6 +137,7 @@ if(SHERPA_PLUGINS_TESTS AND COMMAND avnd_common_setup)
   endfunction()
 
   sherpa_test(test_structural)
+  sherpa_test(test_coverage)
   sherpa_test(test_asr_offline)
   sherpa_test(test_asr_online)
   sherpa_test(test_vad)

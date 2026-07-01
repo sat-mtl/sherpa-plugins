@@ -82,7 +82,8 @@ inline std::string file_if_exists(const fs::path& dir, std::string_view name)
 // Offline (batch) ASR
 // ---------------------------------------------------------------------------
 inline OfflineRecognizerHandle create_offline_recognizer(
-    std::string_view dir, int num_threads, std::string_view decoding)
+    std::string_view dir, int num_threads, std::string_view decoding,
+    const char* provider = "cpu")
 {
   const auto& L = SherpaLoader::instance();
   fs::path d{dir};
@@ -104,7 +105,7 @@ inline OfflineRecognizerHandle create_offline_recognizer(
   cfg.feat_config.feature_dim = 80;
   cfg.model_config.tokens = tokens.c_str();
   cfg.model_config.num_threads = num_threads;
-  cfg.model_config.provider = "cpu";
+  cfg.model_config.provider = provider;
   cfg.decoding_method = dec_method.c_str();
 
   // Extra files for multi-part architectures (moonshine).
@@ -196,7 +197,8 @@ inline OfflineRecognizerHandle create_offline_recognizer(
 // ---------------------------------------------------------------------------
 inline OnlineRecognizerHandle create_online_recognizer(
     std::string_view dir, int num_threads, std::string_view decoding,
-    bool enable_endpoint, std::string_view hotwords_file)
+    bool enable_endpoint, std::string_view hotwords_file,
+    const char* provider = "cpu")
 {
   const auto& L = SherpaLoader::instance();
   fs::path d{dir};
@@ -219,7 +221,7 @@ inline OnlineRecognizerHandle create_online_recognizer(
   cfg.feat_config.feature_dim = 80;
   cfg.model_config.tokens = tokens.c_str();
   cfg.model_config.num_threads = num_threads;
-  cfg.model_config.provider = "cpu";
+  cfg.model_config.provider = provider;
   cfg.decoding_method = dec_method.c_str();
   cfg.enable_endpoint = enable_endpoint ? 1 : 0;
   cfg.rule1_min_trailing_silence = 2.4f;
@@ -249,6 +251,11 @@ inline OnlineRecognizerHandle create_online_recognizer(
   {
     cfg.model_config.nemo_ctc.model = any.c_str();
   }
+  else if(icontains(any, "t-one") || icontains(any, "tone")
+          || icontains(dirname, "t-one"))
+  {
+    cfg.model_config.t_one_ctc.model = any.c_str();
+  }
   else
   {
     return {};
@@ -263,7 +270,7 @@ inline OnlineRecognizerHandle create_online_recognizer(
 // ---------------------------------------------------------------------------
 inline VadHandle create_vad(
     std::string_view path, float threshold, int sample_rate, int num_threads,
-    float buffer_seconds = 30.f)
+    float buffer_seconds = 30.f, const char* provider = "cpu")
 {
   const auto& L = SherpaLoader::instance();
   fs::path p{path};
@@ -294,7 +301,7 @@ inline VadHandle create_vad(
   std::memset(&cfg, 0, sizeof(cfg));
   cfg.sample_rate = sample_rate;
   cfg.num_threads = num_threads;
-  cfg.provider = "cpu";
+  cfg.provider = provider;
   if(is_ten)
   {
     cfg.ten_vad.model = model.c_str();
@@ -326,7 +333,8 @@ inline int vad_window_size(std::string_view path)
 // ---------------------------------------------------------------------------
 // TTS
 // ---------------------------------------------------------------------------
-inline TtsHandle create_tts(std::string_view dir, int num_threads)
+inline TtsHandle create_tts(
+    std::string_view dir, int num_threads, const char* provider = "cpu")
 {
   const auto& L = SherpaLoader::instance();
   fs::path d{dir};
@@ -348,13 +356,49 @@ inline TtsHandle create_tts(std::string_view dir, int num_threads)
   }
   std::string dirname = to_lower(d.filename().string());
 
+  std::string enc = find_in_dir(d, {"encoder"});
+  std::string dec = find_in_dir(d, {"decoder"});
+
   SherpaOnnxOfflineTtsConfig cfg;
   std::memset(&cfg, 0, sizeof(cfg));
   cfg.model.num_threads = num_threads;
-  cfg.model.provider = "cpu";
+  cfg.model.provider = provider;
   cfg.max_num_sentences = 1;
 
-  if(!voices.empty() && (icontains(dirname, "kitten") || icontains(model, "kitten")))
+  if(icontains(dirname, "zipvoice") || (!enc.empty() && !dec.empty() && !vocoder.empty()))
+  {
+    cfg.model.zipvoice.tokens = tokens.c_str();
+    cfg.model.zipvoice.encoder = enc.c_str();
+    cfg.model.zipvoice.decoder = dec.c_str();
+    cfg.model.zipvoice.vocoder = vocoder.c_str();
+    if(!data_dir.empty())
+      cfg.model.zipvoice.data_dir = data_dir.c_str();
+    if(!lexicon.empty())
+      cfg.model.zipvoice.lexicon = lexicon.c_str();
+  }
+  else if(icontains(dirname, "supertonic"))
+  {
+    // Named locals: the c_str() must outlive the Create* call below.
+    static thread_local std::string dp, te, ve;
+    dp = find_in_dir(d, {"duration"});
+    te = find_in_dir(d, {"text_encoder"});
+    ve = find_in_dir(d, {"vector"});
+    cfg.model.supertonic.duration_predictor = dp.c_str();
+    cfg.model.supertonic.text_encoder = te.c_str();
+    cfg.model.supertonic.vector_estimator = ve.c_str();
+    cfg.model.supertonic.vocoder = vocoder.c_str();
+  }
+  else if(icontains(dirname, "pocket"))
+  {
+    static thread_local std::string lf, lm;
+    lf = find_in_dir(d, {"lm_flow"});
+    lm = find_in_dir(d, {"lm_main"});
+    cfg.model.pocket.lm_flow = lf.c_str();
+    cfg.model.pocket.lm_main = lm.c_str();
+    cfg.model.pocket.encoder = enc.c_str();
+    cfg.model.pocket.decoder = dec.c_str();
+  }
+  else if(!voices.empty() && (icontains(dirname, "kitten") || icontains(model, "kitten")))
   {
     cfg.model.kitten.model = model.c_str();
     cfg.model.kitten.voices = voices.c_str();

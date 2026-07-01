@@ -9,10 +9,12 @@
 // only downmixes + accumulates and dispatches. See helpers/AudioChunker.hpp.
 
 #include "helpers/AudioChunker.hpp"
+#include "helpers/Common.hpp"
 #include "helpers/ModelConfig.hpp"
 
 #include <halp/audio.hpp>
 #include <halp/callback.hpp>
+#include <halp/controls.enums.hpp>
 #include <halp/controls.hpp>
 #include <halp/file_port.hpp>
 #include <halp/meta.hpp>
@@ -41,6 +43,7 @@ public:
     halp::dynamic_audio_bus<"In", float> audio;
     halp::folder_port<"Model"> model;
     halp::toggle<"Record"> record;
+    halp::enum_t<Provider, "Provider"> provider;
     halp::hslider_i32<"Threads", halp::range{1., 16., 1.}> threads;
   } inputs;
 
@@ -55,6 +58,7 @@ public:
     std::vector<float> samples;
     double rate = 16000.;
     int num_threads = 1;
+    Provider provider = Provider::CPU;
     bool reload = false;
     std::string want_model;
     std::shared_ptr<OfflineRecognizerHandle> rec;
@@ -129,6 +133,7 @@ inline void OfflineRecognizer::dispatch()
   m_accum.drain_into(job.samples);
   job.rate = m_host_rate;
   job.num_threads = inputs.threads.value;
+  job.provider = inputs.provider.value;
   job.want_model = m_requested_model;
   job.reload = m_reload;
   job.rec = m_rec;
@@ -148,7 +153,8 @@ OfflineRecognizer::worker::work(std::shared_ptr<Job> job)
   {
     job->rec = std::make_shared<OfflineRecognizerHandle>(
         model::create_offline_recognizer(
-            job->want_model, job->num_threads, "greedy_search"));
+            job->want_model, job->num_threads, "greedy_search",
+            provider_str(job->provider)));
   }
 
   job->text.clear();
