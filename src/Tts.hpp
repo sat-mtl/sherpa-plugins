@@ -54,6 +54,7 @@ public:
     halp::lineedit<"Reference text", ""> reference_text;
     halp::enum_t<Provider, "Provider"> provider;
     halp::hslider_i32<"Threads", halp::range{1., 8., 1.}> threads;
+    halp::lineedit<"Advanced", ""> advanced;
   } inputs;
 
   struct
@@ -76,6 +77,7 @@ public:
     std::vector<float> ref;
     int ref_rate = 0;
     std::string ref_text;
+    std::string advanced;
     double host_rate = 48000.;
     std::shared_ptr<TtsHandle> tts;
     std::vector<float> out; // synthesized, resampled to host_rate, mono
@@ -163,6 +165,7 @@ inline void Tts::dispatch()
   job.silence = inputs.silence.value;
   job.num_steps = inputs.num_steps.value;
   job.ref_text = inputs.reference_text.value;
+  job.advanced = inputs.advanced.value;
   job.ref.clear();
   {
     const int rch = inputs.reference.channels();
@@ -198,7 +201,7 @@ inline std::function<void(Tts&)> Tts::worker::work(std::shared_ptr<Job> job)
   {
     job->tts = std::make_shared<TtsHandle>(
         model::create_tts(job->want_model, job->num_threads,
-                          provider_str(job->provider)));
+                          provider_str(job->provider), job->advanced));
   }
 
   job->out.clear();

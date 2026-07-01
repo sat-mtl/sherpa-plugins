@@ -12,6 +12,7 @@
 // Create* call, so they only need to outlive that call (they do).
 
 #include "helpers/Handles.hpp"
+#include "helpers/Options.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -83,7 +84,7 @@ inline std::string file_if_exists(const fs::path& dir, std::string_view name)
 // ---------------------------------------------------------------------------
 inline OfflineRecognizerHandle create_offline_recognizer(
     std::string_view dir, int num_threads, std::string_view decoding,
-    const char* provider = "cpu")
+    const char* provider = "cpu", std::string_view advanced = {})
 {
   const auto& L = SherpaLoader::instance();
   fs::path d{dir};
@@ -189,6 +190,22 @@ inline OfflineRecognizerHandle create_offline_recognizer(
     return {};
   }
 
+  // Advanced (key=value) overrides. `adv` owns the strings until the Create call.
+  opts::KeyValues adv{advanced};
+  if(!adv.empty())
+  {
+    adv.apply_cstr("hotwords_file", cfg.hotwords_file);
+    adv.apply_cstr("rule_fsts", cfg.rule_fsts);
+    adv.apply_cstr("rule_fars", cfg.rule_fars);
+    adv.apply_float("hotwords_score", cfg.hotwords_score);
+    adv.apply_float("blank_penalty", cfg.blank_penalty);
+    adv.apply_int("max_active_paths", cfg.max_active_paths);
+    // Whisper-only knobs (ignored by the other offline model types).
+    adv.apply_cstr("language", cfg.model_config.whisper.language);
+    adv.apply_cstr("task", cfg.model_config.whisper.task);
+    adv.apply_int("tail_paddings", cfg.model_config.whisper.tail_paddings);
+  }
+
   return OfflineRecognizerHandle{L.SherpaOnnxCreateOfflineRecognizer(&cfg)};
 }
 
@@ -198,7 +215,7 @@ inline OfflineRecognizerHandle create_offline_recognizer(
 inline OnlineRecognizerHandle create_online_recognizer(
     std::string_view dir, int num_threads, std::string_view decoding,
     bool enable_endpoint, std::string_view hotwords_file,
-    const char* provider = "cpu")
+    const char* provider = "cpu", std::string_view advanced = {})
 {
   const auto& L = SherpaLoader::instance();
   fs::path d{dir};
@@ -261,6 +278,21 @@ inline OnlineRecognizerHandle create_online_recognizer(
     return {};
   }
 
+  // Advanced (key=value) overrides. `adv` owns the strings until the Create call.
+  opts::KeyValues adv{advanced};
+  if(!adv.empty())
+  {
+    adv.apply_cstr("hotwords_file", cfg.hotwords_file);
+    adv.apply_cstr("rule_fsts", cfg.rule_fsts);
+    adv.apply_cstr("rule_fars", cfg.rule_fars);
+    adv.apply_float("hotwords_score", cfg.hotwords_score);
+    adv.apply_float("blank_penalty", cfg.blank_penalty);
+    adv.apply_int("max_active_paths", cfg.max_active_paths);
+    adv.apply_float("rule1_min_trailing_silence", cfg.rule1_min_trailing_silence);
+    adv.apply_float("rule2_min_trailing_silence", cfg.rule2_min_trailing_silence);
+    adv.apply_float("rule3_min_utterance_length", cfg.rule3_min_utterance_length);
+  }
+
   return OnlineRecognizerHandle{L.SherpaOnnxCreateOnlineRecognizer(&cfg)};
 }
 
@@ -270,7 +302,8 @@ inline OnlineRecognizerHandle create_online_recognizer(
 // ---------------------------------------------------------------------------
 inline VadHandle create_vad(
     std::string_view path, float threshold, int sample_rate, int num_threads,
-    float buffer_seconds = 30.f, const char* provider = "cpu")
+    float buffer_seconds = 30.f, const char* provider = "cpu",
+    std::string_view advanced = {})
 {
   const auto& L = SherpaLoader::instance();
   fs::path p{path};
@@ -302,6 +335,16 @@ inline VadHandle create_vad(
   cfg.sample_rate = sample_rate;
   cfg.num_threads = num_threads;
   cfg.provider = provider;
+  // Advanced (key=value) overrides applied to whichever VAD family is active.
+  opts::KeyValues adv{advanced};
+  auto apply_vad = [&](auto& v) {
+    adv.apply_float("threshold", v.threshold);
+    adv.apply_float("min_silence_duration", v.min_silence_duration);
+    adv.apply_float("min_speech_duration", v.min_speech_duration);
+    adv.apply_float("max_speech_duration", v.max_speech_duration);
+    adv.apply_int("window_size", v.window_size);
+  };
+
   if(is_ten)
   {
     cfg.ten_vad.model = model.c_str();
@@ -310,6 +353,7 @@ inline VadHandle create_vad(
     cfg.ten_vad.min_speech_duration = 0.25f;
     cfg.ten_vad.max_speech_duration = 20.f;
     cfg.ten_vad.window_size = 256;
+    apply_vad(cfg.ten_vad);
   }
   else
   {
@@ -319,6 +363,7 @@ inline VadHandle create_vad(
     cfg.silero_vad.min_speech_duration = 0.25f;
     cfg.silero_vad.max_speech_duration = 20.f;
     cfg.silero_vad.window_size = 512;
+    apply_vad(cfg.silero_vad);
   }
 
   return VadHandle{L.SherpaOnnxCreateVoiceActivityDetector(&cfg, buffer_seconds)};
@@ -334,7 +379,8 @@ inline int vad_window_size(std::string_view path)
 // TTS
 // ---------------------------------------------------------------------------
 inline TtsHandle create_tts(
-    std::string_view dir, int num_threads, const char* provider = "cpu")
+    std::string_view dir, int num_threads, const char* provider = "cpu",
+    std::string_view advanced = {})
 {
   const auto& L = SherpaLoader::instance();
   fs::path d{dir};
@@ -364,6 +410,9 @@ inline TtsHandle create_tts(
   cfg.model.num_threads = num_threads;
   cfg.model.provider = provider;
   cfg.max_num_sentences = 1;
+
+  // Advanced (key=value) overrides. `adv` owns the strings until the Create call.
+  opts::KeyValues adv{advanced};
 
   if(icontains(dirname, "zipvoice") || (!enc.empty() && !dec.empty() && !vocoder.empty()))
   {
@@ -406,6 +455,7 @@ inline TtsHandle create_tts(
     if(!data_dir.empty())
       cfg.model.kitten.data_dir = data_dir.c_str();
     cfg.model.kitten.length_scale = 1.0f;
+    adv.apply_float("length_scale", cfg.model.kitten.length_scale);
   }
   else if(!voices.empty())
   {
@@ -416,6 +466,7 @@ inline TtsHandle create_tts(
     if(!data_dir.empty())
       cfg.model.kokoro.data_dir = data_dir.c_str();
     cfg.model.kokoro.length_scale = 1.0f;
+    adv.apply_float("length_scale", cfg.model.kokoro.length_scale);
   }
   else if(!vocoder.empty() && !acoustic.empty())
   {
@@ -428,6 +479,8 @@ inline TtsHandle create_tts(
       cfg.model.matcha.data_dir = data_dir.c_str();
     cfg.model.matcha.noise_scale = 0.667f;
     cfg.model.matcha.length_scale = 1.0f;
+    adv.apply_float("noise_scale", cfg.model.matcha.noise_scale);
+    adv.apply_float("length_scale", cfg.model.matcha.length_scale);
   }
   else if(!model.empty())
   {
@@ -441,11 +494,19 @@ inline TtsHandle create_tts(
     cfg.model.vits.noise_scale = 0.667f;
     cfg.model.vits.noise_scale_w = 0.8f;
     cfg.model.vits.length_scale = 1.0f;
+    adv.apply_float("noise_scale", cfg.model.vits.noise_scale);
+    adv.apply_float("noise_scale_w", cfg.model.vits.noise_scale_w);
+    adv.apply_float("length_scale", cfg.model.vits.length_scale);
   }
   else
   {
     return {};
   }
+
+  // Top-level text-normalization / chunking overrides (all model families).
+  adv.apply_cstr("rule_fsts", cfg.rule_fsts);
+  adv.apply_cstr("rule_fars", cfg.rule_fars);
+  adv.apply_int("max_num_sentences", cfg.max_num_sentences);
 
   return TtsHandle{L.SherpaOnnxCreateOfflineTts(&cfg)};
 }

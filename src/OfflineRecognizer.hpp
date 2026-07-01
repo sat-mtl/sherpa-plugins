@@ -47,6 +47,7 @@ public:
     halp::enum_t<Decoding, "Decoding"> decoding;
     halp::enum_t<Provider, "Provider"> provider;
     halp::hslider_i32<"Threads", halp::range{1., 16., 1.}> threads;
+    halp::lineedit<"Advanced", ""> advanced;
   } inputs;
 
   struct
@@ -69,6 +70,7 @@ public:
     Decoding decoding = Decoding::GreedySearch;
     bool reload = false;
     std::string want_model;
+    std::string advanced;
     std::shared_ptr<OfflineRecognizerHandle> rec;
     std::string text;
     std::vector<std::string> tokens;
@@ -147,6 +149,7 @@ inline void OfflineRecognizer::dispatch()
   job.provider = inputs.provider.value;
   job.decoding = inputs.decoding.value;
   job.want_model = m_requested_model;
+  job.advanced = inputs.advanced.value;
   job.reload = m_reload;
   job.rec = m_rec;
   m_reload = false;
@@ -166,7 +169,7 @@ OfflineRecognizer::worker::work(std::shared_ptr<Job> job)
     job->rec = std::make_shared<OfflineRecognizerHandle>(
         model::create_offline_recognizer(
             job->want_model, job->num_threads, decoding_str(job->decoding),
-            provider_str(job->provider)));
+            provider_str(job->provider), job->advanced));
   }
 
   job->text.clear();

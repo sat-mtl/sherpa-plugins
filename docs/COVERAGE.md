@@ -43,22 +43,31 @@ Detection is heuristic (filenames + dir name); every multi-family object also ha
 
 ## Options
 
-- **Provider** (CPU / CUDA / CoreML / DirectML) — exposed on all 4 core objects
-  (ASR offline/online, VAD, TTS); sherpa falls back to CPU if unavailable.
+- **Provider** (CPU / CUDA / CoreML / DirectML) — exposed on **all 11 objects**;
+  sherpa falls back to CPU if the requested provider is unavailable.
 - **Threads** — everywhere.
-- **ASR**: endpointing (online), result metadata out (tokens, timestamps,
-  lang/emotion/event).
-- **VAD**: threshold. **TTS**: speaker, speed. **KWS**: keywords, threshold.
+- **ASR**: decoding method (greedy / modified-beam-search), endpointing (online),
+  result metadata out (tokens, timestamps, lang/emotion/event).
+- **VAD**: threshold. **TTS**: speaker, speed, silence, steps, and zero-shot
+  **voice cloning** (reference audio + text). **KWS**: keywords, threshold.
 - **Speaker**: enroll/remove/clear messages + threshold.
 
-### Still hardcoded / not yet exposed (roadmap)
+### Advanced (key=value) escape hatch
 
-- Provider on the 6 extended objects (they build config inline — CPU only for now).
-- decoding_method, hotwords, rule-FSTs (text normalization/ITN), blank_penalty,
-  max_active_paths; VAD min/max-speech/window; TTS noise/length scales,
-  silence_scale, and **zero-shot voice cloning** (reference_audio/reference_text);
-  whisper language/task; an `Advanced (key=value)` escape-hatch port for the long
-  tail of config fields.
+The 4 core objects (ASR offline/online, VAD, TTS) expose an **`Advanced`** free-text
+port for the long tail of sherpa config fields. Entries are `key = value`, separated
+by newlines or `;` (not `,`, which appears inside values); keys are case-insensitive.
+Parsed on the worker thread, applied over the auto-built config. See
+`src/helpers/Options.hpp`.
+
+| Object | Keys |
+|---|---|
+| ASR offline | `hotwords_file`, `hotwords_score`, `blank_penalty`, `max_active_paths`, `rule_fsts`, `rule_fars`, whisper `language` / `task` / `tail_paddings` |
+| ASR online | `hotwords_file`, `hotwords_score`, `blank_penalty`, `max_active_paths`, `rule_fsts`, `rule_fars`, `rule1_min_trailing_silence`, `rule2_min_trailing_silence`, `rule3_min_utterance_length` |
+| VAD | `threshold`, `min_silence_duration`, `min_speech_duration`, `max_speech_duration`, `window_size` |
+| TTS | `noise_scale`, `noise_scale_w` (vits), `length_scale`, `rule_fsts`, `rule_fars`, `max_num_sentences` |
+
+Example (TTS): `length_scale = 1.2 ; noise_scale = 0.5`
 
 ## Verification
 

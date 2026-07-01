@@ -15,6 +15,7 @@
 #include "Tts.hpp"
 #include "Vad.hpp"
 #include "helpers/AudioChunker.hpp"
+#include "helpers/Options.hpp"
 
 #include <catch2/catch_all.hpp>
 
@@ -82,6 +83,50 @@ TEST_CASE("Driving audio with no worker wired is a safe no-op", "[structural]")
       .input_channels = 1, .output_channels = 0, .frames = 256, .rate = 48000.});
   std::vector<float> tone(48000, 0.25f);
   REQUIRE_NOTHROW(test::drive_audio(obj, tone, 256));
+}
+
+TEST_CASE("Advanced key=value parser (Options)", "[structural]")
+{
+  using sherpa::opts::KeyValues;
+
+  // Newline- and semicolon-separated entries, whitespace-insensitive, keys
+  // matched case-insensitively; ',' is NOT a separator (sherpa values use it).
+  KeyValues kv{
+      "hotwords_score = 2.5\n blank_penalty=-1 ; MAX_ACTIVE_PATHS = 8\n"
+      "rule_fsts=a.fst,b.fst\nlanguage = en"};
+
+  REQUIRE_FALSE(kv.empty());
+
+  float score = 0.f;
+  kv.apply_float("hotwords_score", score);
+  CHECK(score == Catch::Approx(2.5f));
+
+  float blank = 99.f;
+  kv.apply_float("Blank_Penalty", blank); // case-insensitive key
+  CHECK(blank == Catch::Approx(-1.f));
+
+  int paths = 1;
+  kv.apply_int("max_active_paths", paths);
+  CHECK(paths == 8);
+
+  // Comma-containing value survives (comma is not a separator).
+  REQUIRE(kv.get_cstr("rule_fsts") != nullptr);
+  CHECK(std::string_view{kv.get_cstr("rule_fsts")} == "a.fst,b.fst");
+
+  const char* lang = nullptr;
+  kv.apply_cstr("language", lang);
+  REQUIRE(lang != nullptr);
+  CHECK(std::string_view{lang} == "en");
+
+  // Absent keys leave targets untouched.
+  float untouched = 7.f;
+  kv.apply_float("does_not_exist", untouched);
+  CHECK(untouched == Catch::Approx(7.f));
+  CHECK(kv.get_cstr("nope") == nullptr);
+
+  // Empty input yields an empty set.
+  CHECK(KeyValues{""}.empty());
+  CHECK(KeyValues{"   \n  ;  \n"}.empty());
 }
 
 TEST_CASE("SherpaLoader singleton never throws and reports availability",

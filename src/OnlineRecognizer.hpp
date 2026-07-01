@@ -50,6 +50,7 @@ public:
     halp::enum_t<Decoding, "Decoding"> decoding;
     halp::enum_t<Provider, "Provider"> provider;
     halp::hslider_i32<"Threads", halp::range{1., 16., 1.}> threads;
+    halp::lineedit<"Advanced", ""> advanced;
   } inputs;
 
   struct
@@ -71,6 +72,7 @@ public:
     bool reload = false;
     bool endpointing = true;
     std::string want_model;
+    std::string advanced;
     std::shared_ptr<OnlineRecognizerHandle> rec;
     std::shared_ptr<OnlineStreamHandle> stream;
     std::string text;
@@ -146,6 +148,7 @@ inline void OnlineRecognizer::dispatch()
   job.decoding = inputs.decoding.value;
   job.endpointing = inputs.endpointing.value;
   job.want_model = m_requested_model;
+  job.advanced = inputs.advanced.value;
   job.reload = m_reload;
   job.rec = m_rec;
   job.stream = m_stream;
@@ -166,7 +169,7 @@ OnlineRecognizer::worker::work(std::shared_ptr<Job> job)
     job->rec = std::make_shared<OnlineRecognizerHandle>(
         model::create_online_recognizer(
             job->want_model, job->num_threads, decoding_str(job->decoding),
-            job->endpointing, "", provider_str(job->provider)));
+            job->endpointing, "", provider_str(job->provider), job->advanced));
     job->stream.reset();
   }
   if(job->rec && *job->rec && (!job->stream || !*job->stream))

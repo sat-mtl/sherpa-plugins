@@ -51,6 +51,7 @@ public:
     halp::toggle<"Emit audio"> emit_audio;
     halp::enum_t<Provider, "Provider"> provider;
     halp::hslider_i32<"Threads", halp::range{1., 8., 1.}> threads;
+    halp::lineedit<"Advanced", ""> advanced;
   } inputs;
 
   struct
@@ -77,6 +78,7 @@ public:
     bool want_audio = false;
     bool reload = false;
     std::string want_model;
+    std::string advanced;
     std::shared_ptr<VadHandle> vad;
     std::shared_ptr<LinearResamplerHandle> resampler;
     std::vector<Seg> segments;
@@ -149,6 +151,7 @@ inline void Vad::dispatch()
   job.threshold = inputs.threshold.value;
   job.want_audio = inputs.emit_audio.value;
   job.want_model = m_requested_model;
+  job.advanced = inputs.advanced.value;
   job.reload = m_reload;
   job.vad = m_vad;
   job.resampler = m_resampler;
@@ -167,7 +170,7 @@ inline std::function<void(Vad&)> Vad::worker::work(std::shared_ptr<Job> job)
   {
     job->vad = std::make_shared<VadHandle>(model::create_vad(
         job->want_model, job->threshold, 16000, job->num_threads, 30.f,
-        provider_str(job->provider)));
+        provider_str(job->provider), job->advanced));
     job->resampler.reset();
   }
   if(job->reload || !job->resampler || !*job->resampler)
