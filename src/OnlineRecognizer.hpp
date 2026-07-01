@@ -56,6 +56,8 @@ public:
     halp::callback<"Partial", std::string_view> partial;
     halp::callback<"Final", std::string_view> final_text;
     halp::callback<"Endpoint"> endpoint;
+    halp::val_port<"Tokens", std::vector<std::string>> tokens;
+    halp::val_port<"Timestamps", std::vector<float>> timestamps;
   } outputs;
 
   struct Job
@@ -70,6 +72,8 @@ public:
     std::shared_ptr<OnlineRecognizerHandle> rec;
     std::shared_ptr<OnlineStreamHandle> stream;
     std::string text;
+    std::vector<std::string> tokens;
+    std::vector<float> timestamps;
     bool is_endpoint = false;
     bool has_text = false;
   };
@@ -169,6 +173,8 @@ OnlineRecognizer::worker::work(std::shared_ptr<Job> job)
   }
 
   job->text.clear();
+  job->tokens.clear();
+  job->timestamps.clear();
   job->has_text = false;
   job->is_endpoint = false;
 
@@ -190,6 +196,12 @@ OnlineRecognizer::worker::work(std::shared_ptr<Job> job)
         job->text = r->text;
         job->has_text = true;
       }
+      if(r->tokens_arr && r->count > 0)
+        for(int i = 0; i < r->count; ++i)
+          if(r->tokens_arr[i])
+            job->tokens.emplace_back(r->tokens_arr[i]);
+      if(r->timestamps && r->count > 0)
+        job->timestamps.assign(r->timestamps, r->timestamps + r->count);
       L.SherpaOnnxDestroyOnlineRecognizerResult(r);
     }
 
@@ -216,6 +228,10 @@ OnlineRecognizer::worker::work(std::shared_ptr<Job> job)
     }
     if(job->is_endpoint)
       self.outputs.endpoint();
+    if(!job->tokens.empty())
+      self.outputs.tokens.value = std::move(job->tokens);
+    if(!job->timestamps.empty())
+      self.outputs.timestamps.value = std::move(job->timestamps);
     self.m_inflight.store(false, std::memory_order_release);
   };
 }

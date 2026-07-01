@@ -23,6 +23,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace sherpa
@@ -50,6 +51,11 @@ public:
   struct
   {
     halp::val_port<"Text", std::string> text;
+    halp::val_port<"Tokens", std::vector<std::string>> tokens;
+    halp::val_port<"Timestamps", std::vector<float>> timestamps;
+    halp::callback<"Lang", std::string_view> lang;
+    halp::callback<"Emotion", std::string_view> emotion;
+    halp::callback<"Event", std::string_view> event;
     halp::callback<"Done"> done;
   } outputs;
 
@@ -63,6 +69,9 @@ public:
     std::string want_model;
     std::shared_ptr<OfflineRecognizerHandle> rec;
     std::string text;
+    std::vector<std::string> tokens;
+    std::vector<float> timestamps;
+    std::string lang, emotion, event;
   };
 
   struct worker
@@ -158,6 +167,11 @@ OfflineRecognizer::worker::work(std::shared_ptr<Job> job)
   }
 
   job->text.clear();
+  job->tokens.clear();
+  job->timestamps.clear();
+  job->lang.clear();
+  job->emotion.clear();
+  job->event.clear();
   if(job->rec && *job->rec && !job->samples.empty())
   {
     OfflineStreamHandle stream{
@@ -173,6 +187,18 @@ OfflineRecognizer::worker::work(std::shared_ptr<Job> job)
       {
         if(r->text)
           job->text = r->text;
+        if(r->tokens_arr && r->count > 0)
+          for(int i = 0; i < r->count; ++i)
+            if(r->tokens_arr[i])
+              job->tokens.emplace_back(r->tokens_arr[i]);
+        if(r->timestamps && r->count > 0)
+          job->timestamps.assign(r->timestamps, r->timestamps + r->count);
+        if(r->lang)
+          job->lang = r->lang;
+        if(r->emotion)
+          job->emotion = r->emotion;
+        if(r->event)
+          job->event = r->event;
         L.SherpaOnnxDestroyOfflineRecognizerResult(r);
       }
     }
@@ -182,6 +208,14 @@ OfflineRecognizer::worker::work(std::shared_ptr<Job> job)
     self.m_rec = job->rec;
     self.m_loaded_model = job->want_model;
     self.outputs.text.value = std::move(job->text);
+    self.outputs.tokens.value = std::move(job->tokens);
+    self.outputs.timestamps.value = std::move(job->timestamps);
+    if(!job->lang.empty())
+      self.outputs.lang(std::string_view{job->lang});
+    if(!job->emotion.empty())
+      self.outputs.emotion(std::string_view{job->emotion});
+    if(!job->event.empty())
+      self.outputs.event(std::string_view{job->event});
     self.outputs.done();
     self.m_inflight.store(false, std::memory_order_release);
   };
