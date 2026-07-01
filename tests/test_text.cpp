@@ -21,9 +21,34 @@ TEST_CASE("Text processor transforms input text", "[text][workflow]")
   obj.inputs.model.value = *model;
   obj.inputs.threads.value = 1;
   // Feeding text triggers on_input() -> operator() -> (sync) worker.
-  obj.inputs.text.value = "how are you doing today it is a nice day";
+  const std::string input = "how are you doing today it is a nice day";
+  obj.inputs.text.value = input;
   obj();
 
-  INFO("output: " << obj.outputs.result.value);
-  REQUIRE_FALSE(obj.outputs.result.value.empty());
+  const std::string out = obj.outputs.result.value;
+  INFO("input:  " << input);
+  INFO("output: " << out);
+  REQUIRE_FALSE(out.empty());
+
+  // The processor must actually TRANSFORM the text, not echo it. A punctuation
+  // model restores punctuation and/or casing; a diacritization model adds marks.
+  // Either way the output must differ from the bare lowercase input, and it must
+  // preserve the content (never shorter than the input).
+  CHECK(out != input);
+  CHECK(out.size() >= input.size());
+
+  const bool has_punct = out.find_first_of(".,?!;:،؟") != std::string::npos;
+  bool has_upper = false;
+  bool has_nonascii = false; // diacritics (Arabic tashkeel etc.) are multi-byte
+  for(unsigned char c : out)
+  {
+    if(c >= 'A' && c <= 'Z')
+      has_upper = true;
+    if(c >= 0x80)
+      has_nonascii = true;
+  }
+  INFO("has_punct=" << has_punct << " has_upper=" << has_upper
+                    << " has_nonascii=" << has_nonascii);
+  // A meaningful transformation adds punctuation, casing, or diacritics.
+  CHECK((has_punct || has_upper || has_nonascii));
 }

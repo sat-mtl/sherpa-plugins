@@ -1,5 +1,7 @@
-// Workflow test for sherpa_speaker: capture a spoken utterance, compute its
-// speaker embedding, then enroll it and identify the same clip back.
+// Workflow test for sherpa_speaker: compute a speaker embedding, enroll it, then
+//   * identify the same voice back  -> must match the enrolled name (positive), and
+//   * identify a white-noise clip   -> must NOT match the enrolled name (negative,
+//     i.e. no false accept -- what makes speaker ID actually discriminative).
 //
 // Requires:
 //   SHERPA_TEST_SPEAKER_MODEL = a speaker-embedding model .onnx (file) or a dir
@@ -12,6 +14,7 @@
 #include <catch2/catch_all.hpp>
 
 #include <string>
+#include <vector>
 
 using namespace sherpa;
 
@@ -29,7 +32,8 @@ static void capture_clip(
   test::drive_silence(obj, block); // falling edge -> dispatch
 }
 
-TEST_CASE("Speaker extracts an embedding and identifies a clip", "[speaker][workflow]")
+TEST_CASE("Speaker embeds, identifies its own voice, and rejects noise",
+          "[speaker][workflow]")
 {
   if(!test::loader_ready())
     SHERPA_SKIP("sherpa-onnx runtime library not available");
@@ -55,31 +59,38 @@ TEST_CASE("Speaker extracts an embedding and identifies a clip", "[speaker][work
 
   Speaker obj;
   test::wire_sync_worker(obj);
-
   const int block = 1600;
   obj.prepare(halp::setup{
       .input_channels = 1, .output_channels = 0, .frames = block, .rate = (double)sr});
   obj.inputs.model.value = *model;
   obj.inputs.threads.value = 1;
-  obj.inputs.threshold.value = 0.3f;
+  obj.inputs.threshold.value = 0.4f; // typical verification operating point
 
   std::string matched;
   obj.outputs.speaker.call.context = &matched;
-  obj.outputs.speaker.call.function
-      = +[](void* c, std::string_view s) { *static_cast<std::string*>(c) = std::string(s); };
+  obj.outputs.speaker.call.function = +[](void* c, std::string_view s) {
+    *static_cast<std::string*>(c) = std::string(s);
+  };
 
-  // 1) Compute an embedding (no enrollment yet -> identify against nobody).
+  // 1) Embedding has the model's dimension.
   capture_clip(obj, audio, block, "");
-  INFO("embedding size: " << obj.outputs.embedding.value.size() << ", model dim: " << dim);
+  INFO("embedding size: " << obj.outputs.embedding.value.size() << ", dim: " << dim);
   REQUIRE_FALSE(obj.outputs.embedding.value.empty());
   REQUIRE(obj.outputs.embedding.value.size() == static_cast<std::size_t>(dim));
 
-  // 2) Enroll the same clip under a name, then 3) identify it back.
+  // 2) Enroll the voice, then identify the SAME voice -> must match.
   capture_clip(obj, audio, block, "alice");
-  CHECK(obj.outputs.count.value >= 1);
+  REQUIRE(obj.outputs.count.value >= 1);
 
   matched.clear();
-  capture_clip(obj, audio, block, ""); // identify
-  INFO("identified speaker: '" << matched << "'");
-  CHECK(matched == "alice");
+  capture_clip(obj, audio, block, ""); // identify same voice
+  INFO("self-identify matched: '" << matched << "'");
+  REQUIRE(matched == "alice");
+
+  // 3) Identify white noise -> must NOT be accepted as the enrolled speaker.
+  auto noise = test::white_noise(audio.size(), 0.2f);
+  matched = "sentinel";
+  capture_clip(obj, noise, block, ""); // identify noise
+  INFO("noise-identify matched: '" << matched << "'");
+  CHECK(matched != "alice"); // no false accept (empty, or a non-match)
 }

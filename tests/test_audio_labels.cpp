@@ -1,10 +1,12 @@
-// Workflow test for sherpa_audio_labels: record a clip and expect either audio
-// tagging or spoken language identification to produce a label.
+// Workflow test for sherpa_audio_labels: tag a clip of speech and expect a
+// speech-family label near the top (content check, not just "some label"). The
+// AudioSet ontology used by the tagging models has "Speech", "Narration,
+// monologue", "Conversation", etc.; a speech clip must surface one of them.
 //
 // Requires:
 //   SHERPA_TEST_AUDIO_LABELS_MODEL = an audio-tagging model dir (zipformer/ced +
 //                                    labels csv) OR a whisper dir for language id
-//   SHERPA_TEST_WAV                = any mono wav (resampled internally)
+//   SHERPA_TEST_WAV                = a speech wav (resampled internally)
 #include "TestHelpers.hpp"
 
 #include "AudioLabels.hpp"
@@ -12,10 +14,12 @@
 #include <catch2/catch_all.hpp>
 
 #include <string>
+#include <string_view>
 
 using namespace sherpa;
 
-TEST_CASE("AudioLabels classifies a recorded clip", "[audio_labels][workflow]")
+TEST_CASE("AudioLabels tags speech with a speech-family label",
+          "[audio_labels][workflow]")
 {
   if(!test::loader_ready())
     SHERPA_SKIP("sherpa-onnx runtime library not available");
@@ -40,25 +44,50 @@ TEST_CASE("AudioLabels classifies a recorded clip", "[audio_labels][workflow]")
   obj.inputs.top_k.value = 5;
   obj.inputs.threads.value = 1;
 
-  // Capture the "Top" and "Language" callbacks so a fired result also counts.
-  int top_hits = 0, lang_hits = 0;
-  obj.outputs.top.call.context = &top_hits;
-  obj.outputs.top.call.function
-      = +[](void* c, std::string_view, float) { (*static_cast<int*>(c))++; };
-  obj.outputs.language.call.context = &lang_hits;
-  obj.outputs.language.call.function
-      = +[](void* c, std::string_view) { (*static_cast<int*>(c))++; };
+  std::string top_label;
+  float top_score = -1.f;
+  struct Top { std::string* n; float* s; } cap{&top_label, &top_score};
+  obj.outputs.top.call.context = &cap;
+  obj.outputs.top.call.function = +[](void* c, std::string_view n, float s) {
+    auto* t = static_cast<Top*>(c);
+    *t->n = std::string(n);
+    *t->s = s;
+  };
+  std::string language;
+  obj.outputs.language.call.context = &language;
+  obj.outputs.language.call.function = +[](void* c, std::string_view sv) {
+    *static_cast<std::string*>(c) = std::string(sv);
+  };
 
-  // Listen on -> drive the clip -> Listen off -> one silent block triggers the
-  // falling edge and dispatches the accumulated audio to the worker.
   obj.inputs.listen.value = true;
   test::drive_audio(obj, audio, block);
   obj.inputs.listen.value = false;
-  test::drive_silence(obj, block);
+  test::drive_silence(obj, block); // falling edge -> dispatch
 
-  INFO(
-      "labels: " << obj.outputs.labels.value.size() << ", top hits: " << top_hits
-                 << ", lang hits: " << lang_hits);
-  REQUIRE(
-      (!obj.outputs.labels.value.empty() || top_hits >= 1 || lang_hits >= 1));
+  const auto& labels = obj.outputs.labels.value;
+  INFO("labels: " << labels.size() << ", top: '" << top_label << "' ("
+                  << top_score << "), language: '" << language << "'");
+
+  // Language-ID branch (whisper model): a language code was produced.
+  if(!language.empty())
+  {
+    SUCCEED("spoken-language-id produced a language: " + language);
+    return;
+  }
+
+  // Tagging branch: labels must be present, sorted by descending score, and a
+  // speech-family label must appear for a speech clip.
+  REQUIRE_FALSE(labels.empty());
+  for(std::size_t i = 1; i < labels.size(); ++i)
+    CHECK(labels[i - 1].score >= labels[i].score - 1e-6f); // non-increasing
+  CHECK(labels.front().score > 0.f);
+
+  bool speechy = false;
+  for(const auto& l : labels)
+    if(test::icontains(l.name, "speech") || test::icontains(l.name, "narration")
+       || test::icontains(l.name, "conversation")
+       || test::icontains(l.name, "speak"))
+      speechy = true;
+  INFO("top-" << labels.size() << " labels checked for a speech family match");
+  CHECK(speechy);
 }
