@@ -25,13 +25,25 @@ endif()
 # ossia/score-addon-onnx does) so that try/catch is real and not a terminate().
 set(AVND_USES_EXCEPTIONS ON CACHE BOOL "" FORCE)
 
-# --- The dual-build switch (identical across all celtera/ossia Avendish addons) ---
-# Inside an ossia/score tree, score provides Avendish on CMAKE_PREFIX_PATH and the
-# avnd_addon_* calls emit a single score plugin. Standalone, we fetch Avendish and
-# the same calls emit one target per back-end. No other code path differs; when a
-# branch is genuinely needed, Avendish sets AVND_ADDON_SCORE (1 in score, 0 here).
+# --- Avendish resolution (the dual-build switch) ---
+# In a score build the host ALREADY provides Avendish: the headers come from
+# score-plugin-avnd (include_directories on 3rdparty/avendish/include), and the
+# avnd_addon_* CMake API from score's bundled 3rdparty/avendish, which
+# ScoreAvndHelper puts on CMAKE_PREFIX_PATH. We STILL call find_package(Avendish)
+# here -- AvendishConfig no-ops the build when the host provides the commands, and
+# re-running it is what sets AVND_ADDON_SCORE (and re-defines the addon macros) in
+# THIS directory's scope. avnd_addon_object is a macro that reads AVND_ADDON_SCORE
+# from the caller scope, so a sibling addon having loaded Avendish is not enough --
+# each addon must find_package it itself or it wrongly takes the standalone path
+# (calling avnd_make_dump, which does not exist in a score build).
+#
+# What we must NEVER do in a score build is FetchContent our own Avendish: a
+# fetched copy lands on CMAKE_PREFIX_PATH and shadows the host's, and a
+# stale/mismatched shadow is exactly what breaks avnd_addon_init in a score tree.
+# So the fetch fallback is gated to standalone builds only.
 find_package(Avendish QUIET)
-if(NOT Avendish_FOUND)
+if(NOT Avendish_FOUND
+   AND NOT (TARGET score_lib_base OR COMMAND score_common_setup))
   include(FetchContent)
   FetchContent_Declare(
     Avendish
