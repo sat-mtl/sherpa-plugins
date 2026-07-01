@@ -101,7 +101,11 @@ struct SherpaLoader
 
   bool available = true;
 
-  static const SherpaLoader& instance()
+  // noexcept: the constructor catches the dlopen failure internally and just sets
+  // available=false, so instance() never throws. This is what makes the objects
+  // nothrow-default-constructible, which the Max/Pd (C object model) bindings
+  // static_assert on.
+  static const SherpaLoader& instance() noexcept
   {
     static const SherpaLoader self;
     return self;

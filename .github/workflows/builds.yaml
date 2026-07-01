@@ -14,6 +14,8 @@ jobs:
     secrets: inherit
     with:
       release: false  # set true once a release.sh is added
+      sdk: false      # skip the score-SDK track
+      jit: false      # skip the JIT (runtime-loadable) track
   # Build the same object(s) standalone, one artifact per back-end. The Max /
   # TouchDesigner / Godot jobs zip build/package/sherpa-plugins/ (produced by
   # avnd_addon_package), which bundles the prebuilt sherpa-onnx + onnxruntime libs.

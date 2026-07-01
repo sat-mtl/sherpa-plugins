@@ -84,11 +84,12 @@ if(_sherpa_root)
   # The dump/standalone introspection executables run at build time and dlopen the
   # library; let them find it in the prebuilt tree. Standalone only -- in a score
   # build the host manages rpath and bundles the libraries itself.
+  # include()'d into the top-level scope, so these already land where the
+  # CMakeLists that included us can see them -- no PARENT_SCOPE (which would refer
+  # above the top level and warn "current scope has no parent").
   if(NOT AVND_ADDON_SCORE)
     list(APPEND CMAKE_BUILD_RPATH   "${_sherpa_root}/lib")
     list(APPEND CMAKE_INSTALL_RPATH "${_sherpa_root}/lib")
-    set(CMAKE_BUILD_RPATH   "${CMAKE_BUILD_RPATH}"   PARENT_SCOPE)
-    set(CMAKE_INSTALL_RPATH "${CMAKE_INSTALL_RPATH}" PARENT_SCOPE)
   endif()
 else()
   message(STATUS
@@ -96,4 +97,3 @@ else()
       "compile but report unavailable at runtime until libsherpa-onnx-c-api is "
       "found next to the module. Set -DSHERPA_ONNX_DIR=... to run/package.")
 endif()
-set(SHERPA_SUPPORT_FILES "${SHERPA_SUPPORT_FILES}" PARENT_SCOPE)
