@@ -30,4 +30,17 @@ inline const char* provider_str(Provider p) noexcept
   }
 }
 
+// ASR decoding method.
+enum class Decoding
+{
+  GreedySearch,
+  ModifiedBeamSearch
+};
+
+inline const char* decoding_str(Decoding d) noexcept
+{
+  return d == Decoding::ModifiedBeamSearch ? "modified_beam_search"
+                                           : "greedy_search";
+}
+
 }

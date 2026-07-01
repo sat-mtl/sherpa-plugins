@@ -44,6 +44,7 @@ public:
     halp::dynamic_audio_bus<"In", float> audio;
     halp::folder_port<"Model"> model;
     halp::toggle<"Record"> record;
+    halp::enum_t<Decoding, "Decoding"> decoding;
     halp::enum_t<Provider, "Provider"> provider;
     halp::hslider_i32<"Threads", halp::range{1., 16., 1.}> threads;
   } inputs;
@@ -65,6 +66,7 @@ public:
     double rate = 16000.;
     int num_threads = 1;
     Provider provider = Provider::CPU;
+    Decoding decoding = Decoding::GreedySearch;
     bool reload = false;
     std::string want_model;
     std::shared_ptr<OfflineRecognizerHandle> rec;
@@ -143,6 +145,7 @@ inline void OfflineRecognizer::dispatch()
   job.rate = m_host_rate;
   job.num_threads = inputs.threads.value;
   job.provider = inputs.provider.value;
+  job.decoding = inputs.decoding.value;
   job.want_model = m_requested_model;
   job.reload = m_reload;
   job.rec = m_rec;
@@ -162,7 +165,7 @@ OfflineRecognizer::worker::work(std::shared_ptr<Job> job)
   {
     job->rec = std::make_shared<OfflineRecognizerHandle>(
         model::create_offline_recognizer(
-            job->want_model, job->num_threads, "greedy_search",
+            job->want_model, job->num_threads, decoding_str(job->decoding),
             provider_str(job->provider)));
   }
 
