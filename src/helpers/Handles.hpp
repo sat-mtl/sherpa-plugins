@@ -67,6 +67,43 @@ SHERPA_DEFINE_HANDLE(
     LinearResamplerHandle, SherpaOnnxLinearResampler,
     SherpaOnnxDestroyLinearResampler);
 
+// Extended features. (For a given feature, create* and destroy* load together via
+// SHERPA_OPT, so a non-null handle always has a valid destroy.)
+SHERPA_DEFINE_HANDLE(
+    KeywordSpotterHandle, SherpaOnnxKeywordSpotter, SherpaOnnxDestroyKeywordSpotter);
+SHERPA_DEFINE_HANDLE(
+    SpeakerEmbeddingExtractorHandle, SherpaOnnxSpeakerEmbeddingExtractor,
+    SherpaOnnxDestroySpeakerEmbeddingExtractor);
+SHERPA_DEFINE_HANDLE(
+    SpeakerEmbeddingManagerHandle, SherpaOnnxSpeakerEmbeddingManager,
+    SherpaOnnxDestroySpeakerEmbeddingManager);
+SHERPA_DEFINE_HANDLE(
+    OfflineSpeakerDiarizationHandle, SherpaOnnxOfflineSpeakerDiarization,
+    SherpaOnnxDestroyOfflineSpeakerDiarization);
+SHERPA_DEFINE_HANDLE(
+    OfflinePunctuationHandle, SherpaOnnxOfflinePunctuation,
+    SherpaOnnxDestroyOfflinePunctuation);
+SHERPA_DEFINE_HANDLE(
+    OnlinePunctuationHandle, SherpaOnnxOnlinePunctuation,
+    SherpaOnnxDestroyOnlinePunctuation);
+SHERPA_DEFINE_HANDLE(
+    OfflineDiacritizationHandle, SherpaOnnxOfflineDiacritization,
+    SherpaOnnxDestroyOfflineDiacritization);
+SHERPA_DEFINE_HANDLE(
+    AudioTaggingHandle, SherpaOnnxAudioTagging, SherpaOnnxDestroyAudioTagging);
+SHERPA_DEFINE_HANDLE(
+    SpokenLanguageIdHandle, SherpaOnnxSpokenLanguageIdentification,
+    SherpaOnnxDestroySpokenLanguageIdentification);
+SHERPA_DEFINE_HANDLE(
+    OfflineDenoiserHandle, SherpaOnnxOfflineSpeechDenoiser,
+    SherpaOnnxDestroyOfflineSpeechDenoiser);
+SHERPA_DEFINE_HANDLE(
+    OnlineDenoiserHandle, SherpaOnnxOnlineSpeechDenoiser,
+    SherpaOnnxDestroyOnlineSpeechDenoiser);
+SHERPA_DEFINE_HANDLE(
+    SourceSeparationHandle, SherpaOnnxOfflineSourceSeparation,
+    SherpaOnnxDestroyOfflineSourceSeparation);
+
 #undef SHERPA_DEFINE_HANDLE
 
 }

@@ -74,6 +74,7 @@ sherpa_object(sherpa_asr_offline OfflineRecognizer)
 sherpa_object(sherpa_asr_online  OnlineRecognizer)
 sherpa_object(sherpa_vad         Vad)
 sherpa_object(sherpa_tts         Tts)
+sherpa_object(sherpa_text        TextProcessor)
 
 # Carry the shared headers along so IDEs/the archive see them.
 target_sources(sherpa_plugins PRIVATE
@@ -134,4 +135,5 @@ if(SHERPA_PLUGINS_TESTS AND COMMAND avnd_common_setup)
   sherpa_test(test_asr_online)
   sherpa_test(test_vad)
   sherpa_test(test_tts)
+  sherpa_test(test_text)
 endif()

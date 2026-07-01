@@ -5,6 +5,7 @@
 
 #include "OfflineRecognizer.hpp"
 #include "OnlineRecognizer.hpp"
+#include "TextProcessor.hpp"
 #include "Tts.hpp"
 #include "Vad.hpp"
 #include "helpers/AudioChunker.hpp"
@@ -18,7 +19,7 @@ using namespace sherpa;
 
 TEMPLATE_TEST_CASE(
     "Objects are nothrow default-constructible (Max/Pd requirement)", "[structural]",
-    OfflineRecognizer, OnlineRecognizer, Vad, Tts)
+    OfflineRecognizer, OnlineRecognizer, Vad, Tts, TextProcessor)
 {
   STATIC_REQUIRE(std::is_nothrow_default_constructible_v<TestType>);
 }

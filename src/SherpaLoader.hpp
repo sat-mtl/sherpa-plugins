@@ -43,6 +43,11 @@ namespace sherpa
     }                                                                     \
   } while(0)
 
+// Optional (feature-extension) symbols: load if present. A missing one leaves its
+// pointer null so the corresponding object reports itself invalid, instead of
+// disabling the whole plugin set. Objects must null-check the create* they use.
+#define SHERPA_OPT(name) this->name = m_lib->symbol<decltype(&::name)>(#name)
+
 struct SherpaLoader
 {
   // ---- version / wave / resampler utilities ----
@@ -98,6 +103,103 @@ struct SherpaLoader
   SHERPA_FN(SherpaOnnxOfflineTtsNumSpeakers);
   SHERPA_FN(SherpaOnnxOfflineTtsGenerateWithConfig);
   SHERPA_FN(SherpaOnnxDestroyOfflineTtsGeneratedAudio);
+
+  // ---- keyword spotting (reuses the online stream) ----
+  SHERPA_FN(SherpaOnnxCreateKeywordSpotter);
+  SHERPA_FN(SherpaOnnxDestroyKeywordSpotter);
+  SHERPA_FN(SherpaOnnxCreateKeywordStream);
+  SHERPA_FN(SherpaOnnxCreateKeywordStreamWithKeywords);
+  SHERPA_FN(SherpaOnnxIsKeywordStreamReady);
+  SHERPA_FN(SherpaOnnxDecodeKeywordStream);
+  SHERPA_FN(SherpaOnnxResetKeywordStream);
+  SHERPA_FN(SherpaOnnxGetKeywordResult);
+  SHERPA_FN(SherpaOnnxDestroyKeywordResult);
+
+  // ---- speaker embedding extractor + manager ----
+  SHERPA_FN(SherpaOnnxCreateSpeakerEmbeddingExtractor);
+  SHERPA_FN(SherpaOnnxDestroySpeakerEmbeddingExtractor);
+  SHERPA_FN(SherpaOnnxSpeakerEmbeddingExtractorDim);
+  SHERPA_FN(SherpaOnnxSpeakerEmbeddingExtractorCreateStream);
+  SHERPA_FN(SherpaOnnxSpeakerEmbeddingExtractorIsReady);
+  SHERPA_FN(SherpaOnnxSpeakerEmbeddingExtractorComputeEmbedding);
+  SHERPA_FN(SherpaOnnxSpeakerEmbeddingExtractorDestroyEmbedding);
+  SHERPA_FN(SherpaOnnxCreateSpeakerEmbeddingManager);
+  SHERPA_FN(SherpaOnnxDestroySpeakerEmbeddingManager);
+  SHERPA_FN(SherpaOnnxSpeakerEmbeddingManagerAdd);
+  SHERPA_FN(SherpaOnnxSpeakerEmbeddingManagerAddListFlattened);
+  SHERPA_FN(SherpaOnnxSpeakerEmbeddingManagerRemove);
+  SHERPA_FN(SherpaOnnxSpeakerEmbeddingManagerSearch);
+  SHERPA_FN(SherpaOnnxSpeakerEmbeddingManagerFreeSearch);
+  SHERPA_FN(SherpaOnnxSpeakerEmbeddingManagerGetBestMatches);
+  SHERPA_FN(SherpaOnnxSpeakerEmbeddingManagerFreeBestMatches);
+  SHERPA_FN(SherpaOnnxSpeakerEmbeddingManagerVerify);
+  SHERPA_FN(SherpaOnnxSpeakerEmbeddingManagerContains);
+  SHERPA_FN(SherpaOnnxSpeakerEmbeddingManagerNumSpeakers);
+  SHERPA_FN(SherpaOnnxSpeakerEmbeddingManagerGetAllSpeakers);
+  SHERPA_FN(SherpaOnnxSpeakerEmbeddingManagerFreeAllSpeakers);
+
+  // ---- offline speaker diarization ----
+  SHERPA_FN(SherpaOnnxCreateOfflineSpeakerDiarization);
+  SHERPA_FN(SherpaOnnxDestroyOfflineSpeakerDiarization);
+  SHERPA_FN(SherpaOnnxOfflineSpeakerDiarizationGetSampleRate);
+  SHERPA_FN(SherpaOnnxOfflineSpeakerDiarizationSetConfig);
+  SHERPA_FN(SherpaOnnxOfflineSpeakerDiarizationResultGetNumSpeakers);
+  SHERPA_FN(SherpaOnnxOfflineSpeakerDiarizationResultGetNumSegments);
+  SHERPA_FN(SherpaOnnxOfflineSpeakerDiarizationResultSortByStartTime);
+  SHERPA_FN(SherpaOnnxOfflineSpeakerDiarizationDestroySegment);
+  SHERPA_FN(SherpaOnnxOfflineSpeakerDiarizationProcess);
+  SHERPA_FN(SherpaOnnxOfflineSpeakerDiarizationProcessWithCallback);
+  SHERPA_FN(SherpaOnnxOfflineSpeakerDiarizationDestroyResult);
+
+  // ---- punctuation (offline + online) and diacritization: text -> text ----
+  SHERPA_FN(SherpaOnnxCreateOfflinePunctuation);
+  SHERPA_FN(SherpaOnnxDestroyOfflinePunctuation);
+  SHERPA_FN(SherpaOfflinePunctuationAddPunct);
+  SHERPA_FN(SherpaOfflinePunctuationFreeText);
+  SHERPA_FN(SherpaOnnxCreateOnlinePunctuation);
+  SHERPA_FN(SherpaOnnxDestroyOnlinePunctuation);
+  SHERPA_FN(SherpaOnnxOnlinePunctuationAddPunct);
+  SHERPA_FN(SherpaOnnxOnlinePunctuationFreeText);
+  SHERPA_FN(SherpaOnnxCreateOfflineDiacritization);
+  SHERPA_FN(SherpaOnnxDestroyOfflineDiacritization);
+  SHERPA_FN(SherpaOfflineDiacritizationAddDiacritics);
+  SHERPA_FN(SherpaOfflineDiacritizationFreeText);
+
+  // ---- audio tagging (reuses the offline stream) ----
+  SHERPA_FN(SherpaOnnxCreateAudioTagging);
+  SHERPA_FN(SherpaOnnxDestroyAudioTagging);
+  SHERPA_FN(SherpaOnnxAudioTaggingCreateOfflineStream);
+  SHERPA_FN(SherpaOnnxAudioTaggingCompute);
+  SHERPA_FN(SherpaOnnxAudioTaggingFreeResults);
+
+  // ---- spoken language identification (reuses the offline stream) ----
+  SHERPA_FN(SherpaOnnxCreateSpokenLanguageIdentification);
+  SHERPA_FN(SherpaOnnxDestroySpokenLanguageIdentification);
+  SHERPA_FN(SherpaOnnxSpokenLanguageIdentificationCreateOfflineStream);
+  SHERPA_FN(SherpaOnnxSpokenLanguageIdentificationCompute);
+  SHERPA_FN(SherpaOnnxDestroySpokenLanguageIdentificationResult);
+
+  // ---- speech denoising (offline + online): audio -> audio ----
+  SHERPA_FN(SherpaOnnxCreateOfflineSpeechDenoiser);
+  SHERPA_FN(SherpaOnnxDestroyOfflineSpeechDenoiser);
+  SHERPA_FN(SherpaOnnxOfflineSpeechDenoiserGetSampleRate);
+  SHERPA_FN(SherpaOnnxOfflineSpeechDenoiserRun);
+  SHERPA_FN(SherpaOnnxCreateOnlineSpeechDenoiser);
+  SHERPA_FN(SherpaOnnxDestroyOnlineSpeechDenoiser);
+  SHERPA_FN(SherpaOnnxOnlineSpeechDenoiserGetSampleRate);
+  SHERPA_FN(SherpaOnnxOnlineSpeechDenoiserGetFrameShiftInSamples);
+  SHERPA_FN(SherpaOnnxOnlineSpeechDenoiserRun);
+  SHERPA_FN(SherpaOnnxOnlineSpeechDenoiserFlush);
+  SHERPA_FN(SherpaOnnxOnlineSpeechDenoiserReset);
+  SHERPA_FN(SherpaOnnxDestroyDenoisedAudio);
+
+  // ---- source separation: audio -> N stems ----
+  SHERPA_FN(SherpaOnnxCreateOfflineSourceSeparation);
+  SHERPA_FN(SherpaOnnxDestroyOfflineSourceSeparation);
+  SHERPA_FN(SherpaOnnxOfflineSourceSeparationGetOutputSampleRate);
+  SHERPA_FN(SherpaOnnxOfflineSourceSeparationGetNumberOfStems);
+  SHERPA_FN(SherpaOnnxOfflineSourceSeparationProcess);
+  SHERPA_FN(SherpaOnnxDestroySourceSeparationOutput);
 
   bool available = true;
 
@@ -201,9 +303,100 @@ private:
     SHERPA_REQ(SherpaOnnxOfflineTtsNumSpeakers);
     SHERPA_REQ(SherpaOnnxOfflineTtsGenerateWithConfig);
     SHERPA_REQ(SherpaOnnxDestroyOfflineTtsGeneratedAudio);
+
+    // ---- extended features (optional; missing => that feature reports invalid) ----
+    SHERPA_OPT(SherpaOnnxCreateKeywordSpotter);
+    SHERPA_OPT(SherpaOnnxDestroyKeywordSpotter);
+    SHERPA_OPT(SherpaOnnxCreateKeywordStream);
+    SHERPA_OPT(SherpaOnnxCreateKeywordStreamWithKeywords);
+    SHERPA_OPT(SherpaOnnxIsKeywordStreamReady);
+    SHERPA_OPT(SherpaOnnxDecodeKeywordStream);
+    SHERPA_OPT(SherpaOnnxResetKeywordStream);
+    SHERPA_OPT(SherpaOnnxGetKeywordResult);
+    SHERPA_OPT(SherpaOnnxDestroyKeywordResult);
+
+    SHERPA_OPT(SherpaOnnxCreateSpeakerEmbeddingExtractor);
+    SHERPA_OPT(SherpaOnnxDestroySpeakerEmbeddingExtractor);
+    SHERPA_OPT(SherpaOnnxSpeakerEmbeddingExtractorDim);
+    SHERPA_OPT(SherpaOnnxSpeakerEmbeddingExtractorCreateStream);
+    SHERPA_OPT(SherpaOnnxSpeakerEmbeddingExtractorIsReady);
+    SHERPA_OPT(SherpaOnnxSpeakerEmbeddingExtractorComputeEmbedding);
+    SHERPA_OPT(SherpaOnnxSpeakerEmbeddingExtractorDestroyEmbedding);
+    SHERPA_OPT(SherpaOnnxCreateSpeakerEmbeddingManager);
+    SHERPA_OPT(SherpaOnnxDestroySpeakerEmbeddingManager);
+    SHERPA_OPT(SherpaOnnxSpeakerEmbeddingManagerAdd);
+    SHERPA_OPT(SherpaOnnxSpeakerEmbeddingManagerAddListFlattened);
+    SHERPA_OPT(SherpaOnnxSpeakerEmbeddingManagerRemove);
+    SHERPA_OPT(SherpaOnnxSpeakerEmbeddingManagerSearch);
+    SHERPA_OPT(SherpaOnnxSpeakerEmbeddingManagerFreeSearch);
+    SHERPA_OPT(SherpaOnnxSpeakerEmbeddingManagerGetBestMatches);
+    SHERPA_OPT(SherpaOnnxSpeakerEmbeddingManagerFreeBestMatches);
+    SHERPA_OPT(SherpaOnnxSpeakerEmbeddingManagerVerify);
+    SHERPA_OPT(SherpaOnnxSpeakerEmbeddingManagerContains);
+    SHERPA_OPT(SherpaOnnxSpeakerEmbeddingManagerNumSpeakers);
+    SHERPA_OPT(SherpaOnnxSpeakerEmbeddingManagerGetAllSpeakers);
+    SHERPA_OPT(SherpaOnnxSpeakerEmbeddingManagerFreeAllSpeakers);
+
+    SHERPA_OPT(SherpaOnnxCreateOfflineSpeakerDiarization);
+    SHERPA_OPT(SherpaOnnxDestroyOfflineSpeakerDiarization);
+    SHERPA_OPT(SherpaOnnxOfflineSpeakerDiarizationGetSampleRate);
+    SHERPA_OPT(SherpaOnnxOfflineSpeakerDiarizationSetConfig);
+    SHERPA_OPT(SherpaOnnxOfflineSpeakerDiarizationResultGetNumSpeakers);
+    SHERPA_OPT(SherpaOnnxOfflineSpeakerDiarizationResultGetNumSegments);
+    SHERPA_OPT(SherpaOnnxOfflineSpeakerDiarizationResultSortByStartTime);
+    SHERPA_OPT(SherpaOnnxOfflineSpeakerDiarizationDestroySegment);
+    SHERPA_OPT(SherpaOnnxOfflineSpeakerDiarizationProcess);
+    SHERPA_OPT(SherpaOnnxOfflineSpeakerDiarizationProcessWithCallback);
+    SHERPA_OPT(SherpaOnnxOfflineSpeakerDiarizationDestroyResult);
+
+    SHERPA_OPT(SherpaOnnxCreateOfflinePunctuation);
+    SHERPA_OPT(SherpaOnnxDestroyOfflinePunctuation);
+    SHERPA_OPT(SherpaOfflinePunctuationAddPunct);
+    SHERPA_OPT(SherpaOfflinePunctuationFreeText);
+    SHERPA_OPT(SherpaOnnxCreateOnlinePunctuation);
+    SHERPA_OPT(SherpaOnnxDestroyOnlinePunctuation);
+    SHERPA_OPT(SherpaOnnxOnlinePunctuationAddPunct);
+    SHERPA_OPT(SherpaOnnxOnlinePunctuationFreeText);
+    SHERPA_OPT(SherpaOnnxCreateOfflineDiacritization);
+    SHERPA_OPT(SherpaOnnxDestroyOfflineDiacritization);
+    SHERPA_OPT(SherpaOfflineDiacritizationAddDiacritics);
+    SHERPA_OPT(SherpaOfflineDiacritizationFreeText);
+
+    SHERPA_OPT(SherpaOnnxCreateAudioTagging);
+    SHERPA_OPT(SherpaOnnxDestroyAudioTagging);
+    SHERPA_OPT(SherpaOnnxAudioTaggingCreateOfflineStream);
+    SHERPA_OPT(SherpaOnnxAudioTaggingCompute);
+    SHERPA_OPT(SherpaOnnxAudioTaggingFreeResults);
+
+    SHERPA_OPT(SherpaOnnxCreateSpokenLanguageIdentification);
+    SHERPA_OPT(SherpaOnnxDestroySpokenLanguageIdentification);
+    SHERPA_OPT(SherpaOnnxSpokenLanguageIdentificationCreateOfflineStream);
+    SHERPA_OPT(SherpaOnnxSpokenLanguageIdentificationCompute);
+    SHERPA_OPT(SherpaOnnxDestroySpokenLanguageIdentificationResult);
+
+    SHERPA_OPT(SherpaOnnxCreateOfflineSpeechDenoiser);
+    SHERPA_OPT(SherpaOnnxDestroyOfflineSpeechDenoiser);
+    SHERPA_OPT(SherpaOnnxOfflineSpeechDenoiserGetSampleRate);
+    SHERPA_OPT(SherpaOnnxOfflineSpeechDenoiserRun);
+    SHERPA_OPT(SherpaOnnxCreateOnlineSpeechDenoiser);
+    SHERPA_OPT(SherpaOnnxDestroyOnlineSpeechDenoiser);
+    SHERPA_OPT(SherpaOnnxOnlineSpeechDenoiserGetSampleRate);
+    SHERPA_OPT(SherpaOnnxOnlineSpeechDenoiserGetFrameShiftInSamples);
+    SHERPA_OPT(SherpaOnnxOnlineSpeechDenoiserRun);
+    SHERPA_OPT(SherpaOnnxOnlineSpeechDenoiserFlush);
+    SHERPA_OPT(SherpaOnnxOnlineSpeechDenoiserReset);
+    SHERPA_OPT(SherpaOnnxDestroyDenoisedAudio);
+
+    SHERPA_OPT(SherpaOnnxCreateOfflineSourceSeparation);
+    SHERPA_OPT(SherpaOnnxDestroyOfflineSourceSeparation);
+    SHERPA_OPT(SherpaOnnxOfflineSourceSeparationGetOutputSampleRate);
+    SHERPA_OPT(SherpaOnnxOfflineSourceSeparationGetNumberOfStems);
+    SHERPA_OPT(SherpaOnnxOfflineSourceSeparationProcess);
+    SHERPA_OPT(SherpaOnnxDestroySourceSeparationOutput);
   }
 };
 
+#undef SHERPA_OPT
 #undef SHERPA_REQ
 #undef SHERPA_FN
 
