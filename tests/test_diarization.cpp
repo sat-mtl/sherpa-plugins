@@ -65,8 +65,9 @@ TEST_CASE("Diarization segments a passage with valid, ordered segments",
 
   // Diarization invariants: each segment is a valid, in-bounds interval with a
   // non-negative speaker id; segments are sorted by start time (the object sorts).
+  // (Note: sherpa's segment speaker ids are not guaranteed dense 0..n-1, so we do
+  // not tie the max id to GetNumSpeakers.)
   const float tol = 0.75f; // model resampling / padding slack
-  int max_speaker = -1;
   float prev_start = -1.f;
   for(const auto& s : segs)
   {
@@ -76,11 +77,7 @@ TEST_CASE("Diarization segments a passage with valid, ordered segments",
     CHECK(s.speaker >= 0);
     CHECK(s.start >= prev_start - 1e-4f); // non-decreasing start
     prev_start = s.start;
-    if(s.speaker > max_speaker)
-      max_speaker = s.speaker;
   }
-  // Speaker ids are dense 0..num_speakers-1.
-  CHECK(max_speaker < obj.outputs.num_speakers_out.value);
 }
 
 TEST_CASE("Diarization finds no speakers in pure silence",
