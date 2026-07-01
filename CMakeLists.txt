@@ -126,6 +126,9 @@ if(SHERPA_PLUGINS_TESTS AND COMMAND avnd_common_setup)
     FetchContent_MakeAvailable(Catch2)
   endif()
 
+  # Aggregate target so CI can build every test with one name (no hardcoded list).
+  add_custom_target(sherpa_all_tests)
+
   function(sherpa_test name)
     add_executable(${name} "tests/${name}.cpp")
     avnd_common_setup("" ${name})
@@ -134,6 +137,7 @@ if(SHERPA_PLUGINS_TESTS AND COMMAND avnd_common_setup)
     # Label so `ctest -L sherpa_plugins` runs only these, not the per-backend
     # smoke tests (e.g. godot:NODE) that avnd_addon_object also registers.
     set_tests_properties(${name} PROPERTIES LABELS "sherpa_plugins")
+    add_dependencies(sherpa_all_tests ${name})
   endfunction()
 
   sherpa_test(test_structural)

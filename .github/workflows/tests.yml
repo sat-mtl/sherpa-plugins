@@ -120,8 +120,7 @@ jobs:
             -DCMAKE_POLICY_DEFAULT_CMP0167=OLD
 
       - name: Build tests
-        run: cmake --build build --target
-             test_structural test_asr_offline test_asr_online test_vad test_tts
+        run: cmake --build build --target sherpa_all_tests
 
       - name: Run tests
         working-directory: build
