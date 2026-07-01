@@ -91,7 +91,16 @@ set(SHERPA_BACKENDS
     dump ossia pd max standalone python
     touchdesigner:CHOP_MESSAGE godot:NODE)
 
-function(sherpa_object c_name class)
+# NOTE: this MUST be a macro(), not a function(). In a score build
+# avnd_addon_object (itself a macro) forwards to avnd_score_plugin_add, which
+# accumulates the object into AVND_ADDITIONAL_CLASSES / AVND_CUSTOM_FACTORIES via
+# `set(... PARENT_SCOPE)`. A function() wrapper would swallow that PARENT_SCOPE one
+# level down (in the wrapper's own scope), so nothing reaches the top-level scope
+# where avnd_addon_finalize generates the plugin factory .cpp -- leaving its
+# factories() body empty and registering ZERO objects in score. A macro runs in
+# the caller's (top-level) scope, so the accumulation propagates correctly. (This
+# is the same latent bug present in score-addon-cv's function(add_cv_object).)
+macro(sherpa_object c_name class)
   avnd_addon_object(
     BASE sherpa_plugins
     C_NAME ${c_name}
@@ -101,7 +110,7 @@ function(sherpa_object c_name class)
     DEPENDENCIES sherpa_plugins_deps
     MAIN_FILE "${CMAKE_CURRENT_SOURCE_DIR}/src/${class}.hpp"
     SOURCES "src/${class}.hpp" "src/${class}.cpp")
-endfunction()
+endmacro()
 
 sherpa_object(sherpa_asr               Asr)
 sherpa_object(sherpa_asr_offline       OfflineRecognizer)
