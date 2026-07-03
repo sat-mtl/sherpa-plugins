@@ -351,7 +351,14 @@ inline OfflineRecognizerHandle create_offline_recognizer(
     adv.apply_int("tail_paddings", cfg.model_config.whisper.tail_paddings);
   }
 
-  return OfflineRecognizerHandle{L.SherpaOnnxCreateOfflineRecognizer(&cfg)};
+  OfflineRecognizerHandle h{L.SherpaOnnxCreateOfflineRecognizer(&cfg)};
+  SHERPA_DBG(
+      "[sherpa] offline dir='%.*s' dirname='%s' tokens='%s' enc='%s' dec='%s' "
+      "joiner='%s' any='%s' forced=%d -> create %s\n",
+      (int)dir.size(), dir.data(), dirname.c_str(), tokens.c_str(), enc.c_str(),
+      dec.c_str(), joiner.c_str(), any.c_str(), forced ? 1 : 0,
+      h ? "OK" : "FAILED");
+  return h;
 }
 
 // ---------------------------------------------------------------------------
@@ -438,7 +445,13 @@ inline OnlineRecognizerHandle create_online_recognizer(
     adv.apply_float("rule3_min_utterance_length", cfg.rule3_min_utterance_length);
   }
 
-  return OnlineRecognizerHandle{L.SherpaOnnxCreateOnlineRecognizer(&cfg)};
+  OnlineRecognizerHandle h{L.SherpaOnnxCreateOnlineRecognizer(&cfg)};
+  SHERPA_DBG(
+      "[sherpa] online dir='%.*s' dirname='%s' tokens='%s' enc='%s' dec='%s' "
+      "joiner='%s' any='%s' -> create %s\n",
+      (int)dir.size(), dir.data(), dirname.c_str(), tokens.c_str(), enc.c_str(),
+      dec.c_str(), joiner.c_str(), any.c_str(), h ? "OK" : "FAILED");
+  return h;
 }
 
 // ---------------------------------------------------------------------------
@@ -511,7 +524,12 @@ inline VadHandle create_vad(
     apply_vad(cfg.silero_vad);
   }
 
-  return VadHandle{L.SherpaOnnxCreateVoiceActivityDetector(&cfg, buffer_seconds)};
+  VadHandle h{L.SherpaOnnxCreateVoiceActivityDetector(&cfg, buffer_seconds)};
+  SHERPA_DBG(
+      "[sherpa] vad path='%.*s' model='%s' is_ten=%d sr=%d -> create %s\n",
+      (int)path.size(), path.data(), model.c_str(), is_ten ? 1 : 0, sample_rate,
+      h ? "OK" : "FAILED");
+  return h;
 }
 
 // Window size (samples at the model rate) the VAD expects per AcceptWaveform.
