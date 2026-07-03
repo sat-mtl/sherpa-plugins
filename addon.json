@@ -1,0 +1,11 @@
+{
+  "src": "<url to the .zip file created by the release script>",
+  "name": "Sherpa Speech AI",
+  "raw_name": "score-addon-sherpa",
+  "version": "1.0",
+  "kind": "addon",
+  "short": "Speech AI objects built on sherpa-onnx",
+  "long": "Speech and audio AI objects for ossia score, built on sherpa-onnx: speech recognition (streaming and batch ASR), text-to-speech, voice activity detection, audio tagging, keyword spotting, speaker identification, speaker diarization, speech denoising, source separation and text post-processing. The sherpa-onnx runtime library is loaded dynamically at runtime; models are provided separately (see the sherpa-models package).",
+  "small": "https://raw.githubusercontent.com/OSSIA/score-addon-tutorial/master/Deployment/icon.png",
+  "key": "692ee9eb-6b46-428c-acd8-83528ea9d139"
+}

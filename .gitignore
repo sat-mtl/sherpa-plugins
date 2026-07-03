@@ -29,3 +29,5 @@ Makefile
 .cmake
 .vscode
 package/
+# release.sh staging
+score-addon-sherpa/

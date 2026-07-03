@@ -25,6 +25,19 @@ endif()
 # ossia/score-addon-onnx does) so that try/catch is real and not a terminate().
 set(AVND_USES_EXCEPTIONS ON CACHE BOOL "" FORCE)
 
+# Score's external-addon bootstrap (mirrors score-addon-cv): when the addon is
+# configured as the TOP-LEVEL project against a score source checkout
+# (-DCMAKE_MODULE_PATH=<score>/cmake -DSCORE_SOURCE_DIR=...) or a score SDK
+# (-DSCORE_SDK=...) -- the ossia/actions dev and sdk CI tracks -- this module
+# sets up the score imported targets and puts score's bundled Avendish on
+# CMAKE_PREFIX_PATH (via ScoreAvndHelper), so the find_package(Avendish) below
+# resolves to the host's copy and the REAL score plugin is built. In a score
+# build tree score_lib_base already exists (skip); standalone the module is
+# simply not found (OPTIONAL -> no-op).
+if(NOT TARGET score_lib_base)
+  include(ScoreExternalAddon OPTIONAL)
+endif()
+
 # --- Avendish resolution (the dual-build switch) ---
 # In a score build the host ALREADY provides Avendish: the headers come from
 # score-plugin-avnd (include_directories on 3rdparty/avendish/include), and the
