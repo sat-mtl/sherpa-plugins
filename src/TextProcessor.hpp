@@ -96,6 +96,14 @@ private:
   std::string m_loaded_model;
   Type m_loaded_type = Type::Auto;
   bool m_reload = false;
+
+  // Outputs must be emitted from operator() (the run() cycle), not from the async
+  // worker-result closure: value outlets written outside run() never propagate to
+  // score's ports. The closure stashes here; operator() emits.
+  std::string m_emit_result;
+  bool m_emit_ready = false;
+
+  void emit_pending();
 };
 
 inline void TextProcessor::operator()()
@@ -112,6 +120,17 @@ inline void TextProcessor::operator()()
   if(inputs.model.value != m_loaded_model || inputs.type.value != m_loaded_type)
     m_reload = true;
   dispatch();
+
+  emit_pending(); // emit from the run() cycle so value outlets propagate
+}
+
+inline void TextProcessor::emit_pending()
+{
+  if(!m_emit_ready)
+    return;
+  outputs.result.value = std::move(m_emit_result);
+  outputs.done();
+  m_emit_ready = false;
 }
 
 inline void TextProcessor::dispatch()
@@ -275,8 +294,9 @@ TextProcessor::worker::work(std::shared_ptr<Job> job)
       self.m_loaded_model = job->want_model;
       self.m_loaded_type = job->type;
     }
-    self.outputs.result.value = std::move(job->result);
-    self.outputs.done();
+    // Stash for operator() to emit from the run() cycle (see emit_pending).
+    self.m_emit_result = std::move(job->result);
+    self.m_emit_ready = true;
     self.m_inflight.store(false, std::memory_order_release);
   };
 }

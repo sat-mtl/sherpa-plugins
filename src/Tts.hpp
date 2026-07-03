@@ -106,6 +106,10 @@ private:
   std::string m_last_text;
   bool m_reload = false;
   bool m_speak = false;
+  // The "Done" bang, like every value/callback outlet, must fire from operator()
+  // (the run() cycle) -- a callback invoked from the async worker closure does not
+  // propagate. The closure sets this; operator() fires outputs.done() once.
+  bool m_emit_done = false;
 };
 
 inline void Tts::prepare(halp::setup info)
@@ -148,6 +152,12 @@ inline void Tts::operator()(int frames)
   for(int j = 0; j < frames; ++j)
     out[j] = (pos < n) ? m_playback[pos++] : 0.f;
   m_play_pos = pos;
+
+  if(m_emit_done) // fire from the run() cycle so the callback propagates
+  {
+    outputs.done();
+    m_emit_done = false;
+  }
 }
 
 inline void Tts::dispatch()
@@ -262,7 +272,7 @@ inline std::function<void(Tts&)> Tts::worker::work(std::shared_ptr<Job> job)
     self.m_loaded_model = job->want_model;
     self.m_playback.swap(job->out); // adopt host-rate buffer; no allocation
     self.m_play_pos = 0;
-    self.outputs.done();
+    self.m_emit_done = true; // fired from operator() (see m_emit_done)
     self.m_inflight.store(false, std::memory_order_release);
   };
 }

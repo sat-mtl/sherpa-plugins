@@ -101,6 +101,15 @@ private:
   std::string m_requested_model, m_loaded_model;
   bool m_reload = false;
   bool m_was_recording = false;
+
+  // Outputs must be emitted from operator() (the run() cycle), not from the async
+  // worker closure -- value outlets written outside run() do not propagate.
+  std::string m_emit_text, m_emit_lang, m_emit_emotion, m_emit_event;
+  std::vector<std::string> m_emit_tokens;
+  std::vector<float> m_emit_timestamps;
+  bool m_emit_ready = false;
+
+  void emit_pending();
 };
 
 inline void OfflineRecognizer::prepare(halp::setup info)
@@ -114,6 +123,23 @@ inline void OfflineRecognizer::prepare(halp::setup info)
     m_job->samples.reserve(static_cast<std::size_t>(m_host_rate * 120.0));
     m_job->want_model.reserve(512);
   }
+}
+
+inline void OfflineRecognizer::emit_pending()
+{
+  if(!m_emit_ready)
+    return;
+  outputs.text.value = std::move(m_emit_text);
+  outputs.tokens.value = std::move(m_emit_tokens);
+  outputs.timestamps.value = std::move(m_emit_timestamps);
+  if(!m_emit_lang.empty())
+    outputs.lang(std::string_view{m_emit_lang});
+  if(!m_emit_emotion.empty())
+    outputs.emotion(std::string_view{m_emit_emotion});
+  if(!m_emit_event.empty())
+    outputs.event(std::string_view{m_emit_event});
+  outputs.done();
+  m_emit_ready = false;
 }
 
 inline void OfflineRecognizer::operator()(int frames)
@@ -135,6 +161,8 @@ inline void OfflineRecognizer::operator()(int frames)
   if(m_was_recording && !rec_on)
     dispatch();
   m_was_recording = rec_on;
+
+  emit_pending(); // emit from the run() cycle so value outlets propagate
 }
 
 inline void OfflineRecognizer::dispatch()
@@ -216,16 +244,14 @@ OfflineRecognizer::worker::work(std::shared_ptr<Job> job)
   return [job](OfflineRecognizer& self) {
     self.m_rec = job->rec;
     self.m_loaded_model = job->want_model;
-    self.outputs.text.value = std::move(job->text);
-    self.outputs.tokens.value = std::move(job->tokens);
-    self.outputs.timestamps.value = std::move(job->timestamps);
-    if(!job->lang.empty())
-      self.outputs.lang(std::string_view{job->lang});
-    if(!job->emotion.empty())
-      self.outputs.emotion(std::string_view{job->emotion});
-    if(!job->event.empty())
-      self.outputs.event(std::string_view{job->event});
-    self.outputs.done();
+    // Stash for operator() to emit from the run() cycle (see emit_pending).
+    self.m_emit_text = std::move(job->text);
+    self.m_emit_tokens = std::move(job->tokens);
+    self.m_emit_timestamps = std::move(job->timestamps);
+    self.m_emit_lang = std::move(job->lang);
+    self.m_emit_emotion = std::move(job->emotion);
+    self.m_emit_event = std::move(job->event);
+    self.m_emit_ready = true;
     self.m_inflight.store(false, std::memory_order_release);
   };
 }

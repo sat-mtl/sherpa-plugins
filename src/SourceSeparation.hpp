@@ -116,6 +116,14 @@ private:
   std::string m_requested_model, m_loaded_model;
   bool m_reload = false;
   bool m_was_recording = false;
+
+  // The audio (stems) already stream out of operator() via m_playL/m_playR, but the
+  // num_stems value outlet was written from the async worker closure, which does not
+  // propagate. Stash it and emit from operator() (see emit_pending()).
+  int m_emit_num_stems = 0;
+  bool m_emit_have_num_stems = false;
+
+  void emit_pending();
 };
 
 inline void SourceSeparation::prepare(halp::setup info)
@@ -202,6 +210,16 @@ inline void SourceSeparation::operator()(int frames)
   }
   if(frames > 0)
     m_play_pos = pos + static_cast<std::size_t>(frames);
+
+  emit_pending(); // emit num_stems from the run() cycle so the value outlet propagates
+}
+
+inline void SourceSeparation::emit_pending()
+{
+  if(!m_emit_have_num_stems)
+    return;
+  outputs.num_stems.value = m_emit_num_stems;
+  m_emit_have_num_stems = false;
 }
 
 inline void SourceSeparation::dispatch()
@@ -348,7 +366,8 @@ SourceSeparation::worker::work(std::shared_ptr<Job> job)
       self.m_playR[k].swap(job->out[k].r);
     }
     self.m_play_pos = 0;
-    self.outputs.num_stems.value = job->num_stems;
+    self.m_emit_num_stems = job->num_stems; // emitted from operator()/emit_pending()
+    self.m_emit_have_num_stems = true;
     self.m_inflight.store(false, std::memory_order_release);
   };
 }

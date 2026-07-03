@@ -162,6 +162,17 @@ private:
   std::string m_requested_vad, m_loaded_vad;
   Mode m_requested_mode = Mode::Auto, m_loaded_mode = Mode::Auto;
   bool m_reload = false;
+
+  // Results handed from the worker-result closure to operator(). Outputs MUST be
+  // emitted from the node's run() (operator()), not from the async closure: value
+  // outlets written outside the run() cycle never propagate to score's ports (the
+  // closure runs via the execution queue, a different point than the node tick).
+  // The closure (also on the DSP thread) stashes here; operator() drains + emits.
+  std::string m_emit_partial;
+  bool m_emit_has_partial = false;
+  std::vector<Result> m_emit_finals;
+
+  void emit_pending();
 };
 
 inline void Asr::prepare(halp::setup info)
@@ -175,6 +186,38 @@ inline void Asr::prepare(halp::setup info)
     m_job->want_model.reserve(512);
     m_job->want_vad.reserve(512);
     m_job->partial.reserve(1024);
+  }
+  m_emit_partial.reserve(1024);
+  m_emit_finals.reserve(16);
+}
+
+inline void Asr::emit_pending()
+{
+  // Runs inside operator() (the node run() cycle), so these value-outlet writes
+  // actually propagate to score's ports.
+  if(m_emit_has_partial)
+  {
+    outputs.partial(std::string_view{m_emit_partial});
+    m_emit_has_partial = false;
+  }
+  if(!m_emit_finals.empty())
+  {
+    SHERPA_DBG("[sherpa] ASR EMIT finals=%zu partial-pending=%d\n",
+               m_emit_finals.size(), m_emit_has_partial ? 1 : 0);
+    for(auto& res : m_emit_finals)
+    {
+      outputs.final_text(std::string_view{res.text});
+      outputs.endpoint();
+      if(!res.lang.empty())
+        outputs.lang(std::string_view{res.lang});
+      if(!res.emotion.empty())
+        outputs.emotion(std::string_view{res.emotion});
+      if(!res.event.empty())
+        outputs.event(std::string_view{res.event});
+      outputs.tokens.value = std::move(res.tokens);
+      outputs.timestamps.value = std::move(res.timestamps);
+    }
+    m_emit_finals.clear();
   }
 }
 
@@ -203,6 +246,12 @@ inline void Asr::operator()(int frames)
 
   if(!m_inflight.load(std::memory_order_acquire) && (!m_accum.empty() || m_reload))
     dispatch();
+
+  // Emit results from the run() cycle so the value outlets propagate. Placed after
+  // dispatch() so that with a synchronous worker (tests) the result stashed during
+  // dispatch is flushed the same tick; in score the async closure stashes and the
+  // next operator() flushes it.
+  emit_pending();
 }
 
 inline void Asr::dispatch()
@@ -289,6 +338,12 @@ inline std::function<void(Asr&)> Asr::worker::work(std::shared_ptr<Job> job)
         job->engine = Engine::Batch;
       }
     }
+    SHERPA_DBG(
+        "[sherpa] ASR reload mode=%d -> engine=%d (online=%d stream=%d "
+        "offline=%d vad=%d) model='%s' vad='%s'\n",
+        (int)job->mode, (int)job->engine, job->online && *job->online,
+        job->stream && *job->stream, job->offline && *job->offline,
+        job->vad && *job->vad, job->want_model.c_str(), job->want_vad.c_str());
   }
 
   job->partial.clear();
@@ -416,6 +471,16 @@ inline std::function<void(Asr&)> Asr::worker::work(std::shared_ptr<Job> job)
     }
   }
 
+  // Per-dispatch trace (only when audio flows or results appear, to avoid
+  // spamming the silent reload-only ticks): tells "audio never reached the
+  // object" (no lines with samples>0) apart from "audio flows but nothing is
+  // emitted" (samples>0 but finals=0/partial=0).
+  if(!job->samples.empty() || job->has_partial || !job->finals.empty())
+    SHERPA_DBG(
+        "[sherpa] ASR dispatch engine=%d samples=%zu partial=%d finals=%zu\n",
+        (int)job->engine, job->samples.size(), job->has_partial ? 1 : 0,
+        job->finals.size());
+
   return [job](Asr& self) {
     if(job->reload)
     {
@@ -430,22 +495,16 @@ inline std::function<void(Asr&)> Asr::worker::work(std::shared_ptr<Job> job)
       self.m_loaded_mode = job->mode;
     }
 
+    // Hand results to operator() rather than emitting here: this closure runs on
+    // the DSP thread but via the execution queue, outside the node run() cycle, so
+    // value outlets written here would not propagate. emit_pending() emits them.
     if(job->has_partial)
-      self.outputs.partial(std::string_view{job->partial});
-
-    for(auto& res : job->finals)
     {
-      self.outputs.final_text(std::string_view{res.text});
-      self.outputs.endpoint();
-      if(!res.lang.empty())
-        self.outputs.lang(std::string_view{res.lang});
-      if(!res.emotion.empty())
-        self.outputs.emotion(std::string_view{res.emotion});
-      if(!res.event.empty())
-        self.outputs.event(std::string_view{res.event});
-      self.outputs.tokens.value = std::move(res.tokens);
-      self.outputs.timestamps.value = std::move(res.timestamps);
+      self.m_emit_partial = std::move(job->partial);
+      self.m_emit_has_partial = true;
     }
+    for(auto& res : job->finals)
+      self.m_emit_finals.push_back(std::move(res));
 
     self.m_inflight.store(false, std::memory_order_release);
   };

@@ -108,6 +108,17 @@ private:
   std::string m_requested_model, m_loaded_model;
   bool m_reload = false;
   bool m_active_state = false;
+
+  // Outputs must be emitted from operator() (the run() cycle), not from the async
+  // worker closure -- value outlets written outside run() do not propagate. The
+  // closure stashes here; emit_pending() (called from operator()) emits + does the
+  // rising-edge detection so on_start fires correctly.
+  std::vector<Seg> m_emit_segments;
+  std::vector<std::vector<float>> m_emit_seg_audio;
+  bool m_emit_active = false;
+  bool m_emit_ready = false;
+
+  void emit_pending();
 };
 
 inline void Vad::prepare(halp::setup info)
@@ -120,6 +131,25 @@ inline void Vad::prepare(halp::setup info)
     m_job->samples.reserve(static_cast<std::size_t>(m_host_rate * 4.0));
     m_job->want_model.reserve(512);
   }
+}
+
+inline void Vad::emit_pending()
+{
+  if(!m_emit_ready)
+    return;
+  if(m_emit_active && !m_active_state)
+    outputs.on_start();
+  m_active_state = m_emit_active;
+  outputs.active.value = m_emit_active;
+  for(std::size_t i = 0; i < m_emit_segments.size(); ++i)
+  {
+    outputs.on_segment(m_emit_segments[i].start, m_emit_segments[i].dur);
+    if(i < m_emit_seg_audio.size())
+      outputs.on_audio(std::move(m_emit_seg_audio[i]));
+  }
+  m_emit_segments.clear();
+  m_emit_seg_audio.clear();
+  m_emit_ready = false;
 }
 
 inline void Vad::operator()(int frames)
@@ -137,6 +167,8 @@ inline void Vad::operator()(int frames)
 
   if(!m_inflight.load(std::memory_order_acquire) && (!m_accum.empty() || m_reload))
     dispatch();
+
+  emit_pending(); // emit from the run() cycle so value outlets propagate
 }
 
 inline void Vad::dispatch()
@@ -221,17 +253,13 @@ inline std::function<void(Vad&)> Vad::worker::work(std::shared_ptr<Job> job)
       self.m_resampler = job->resampler;
       self.m_loaded_model = job->want_model;
     }
-    if(job->active && !self.m_active_state)
-      self.outputs.on_start();
-    self.m_active_state = job->active;
-    self.outputs.active.value = job->active;
-
-    for(std::size_t i = 0; i < job->segments.size(); ++i)
-    {
-      self.outputs.on_segment(job->segments[i].start, job->segments[i].dur);
-      if(i < job->seg_audio.size())
-        self.outputs.on_audio(std::move(job->seg_audio[i]));
-    }
+    // Stash for operator() to emit from the run() cycle. The on_start rising-edge
+    // detection is done in emit_pending() so it compares against the correct
+    // previous state (m_active_state is updated there, not here).
+    self.m_emit_active = job->active;
+    self.m_emit_segments = std::move(job->segments);
+    self.m_emit_seg_audio = std::move(job->seg_audio);
+    self.m_emit_ready = true;
     self.m_inflight.store(false, std::memory_order_release);
   };
 }

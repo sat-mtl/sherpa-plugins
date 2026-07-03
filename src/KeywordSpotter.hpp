@@ -156,6 +156,16 @@ private:
   std::string m_requested_keywords_file, m_loaded_keywords_file;
   float m_requested_threshold = 0.25f, m_loaded_threshold = 0.25f;
   bool m_reload = false;
+
+  // Outputs must be emitted from operator() (the run() cycle), not from the async
+  // worker-result closure -- value outlets written outside run() do not propagate.
+  // At most one keyword is produced per dispatch (a single SherpaOnnxGetKeywordResult
+  // call, no loop over results), so a single string + flag suffices. The closure
+  // stashes here; operator() emits.
+  std::string m_emit_keyword;
+  bool m_emit_ready = false;
+
+  void emit_pending();
 };
 
 inline void KeywordSpotter::prepare(halp::setup info)
@@ -172,6 +182,17 @@ inline void KeywordSpotter::prepare(halp::setup info)
     m_job->want_keywords_file.reserve(512);
     m_job->keyword.reserve(256);
   }
+  m_emit_keyword.reserve(256);
+}
+
+inline void KeywordSpotter::emit_pending()
+{
+  if(!m_emit_ready)
+    return;
+  outputs.last.value = m_emit_keyword;
+  outputs.keyword(std::string_view{m_emit_keyword});
+  outputs.detected();
+  m_emit_ready = false;
 }
 
 inline void KeywordSpotter::operator()(int frames)
@@ -204,6 +225,8 @@ inline void KeywordSpotter::operator()(int frames)
 
   if(!m_inflight.load(std::memory_order_acquire) && (!m_accum.empty() || m_reload))
     dispatch();
+
+  emit_pending(); // emit from the run() cycle so value outlets propagate
 }
 
 inline void KeywordSpotter::dispatch()
@@ -301,11 +324,11 @@ KeywordSpotter::worker::work(std::shared_ptr<Job> job)
       self.m_loaded_keywords_file = job->want_keywords_file;
       self.m_loaded_threshold = job->threshold;
     }
+    // Stash for operator() to emit from the run() cycle (see emit_pending).
     if(job->has_keyword)
     {
-      self.outputs.last.value = job->keyword;
-      self.outputs.keyword(std::string_view{job->keyword});
-      self.outputs.detected();
+      self.m_emit_keyword = std::move(job->keyword);
+      self.m_emit_ready = true;
     }
     self.m_inflight.store(false, std::memory_order_release);
   };

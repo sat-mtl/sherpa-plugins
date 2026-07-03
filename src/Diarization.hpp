@@ -181,6 +181,14 @@ private:
   std::string m_requested_model, m_loaded_model;
   bool m_reload = false;
   bool m_was_recording = false;
+
+  // Outputs must be emitted from operator() (the run() cycle), not from the async
+  // worker closure -- value outlets written outside run() do not propagate.
+  int m_emit_num_speakers = 0;
+  std::vector<Segment> m_emit_segments;
+  bool m_emit_ready = false;
+
+  void emit_pending();
 };
 
 inline void Diarization::prepare(halp::setup info)
@@ -194,6 +202,19 @@ inline void Diarization::prepare(halp::setup info)
     m_job->samples.reserve(static_cast<std::size_t>(m_host_rate * 300.0));
     m_job->want_model.reserve(512);
   }
+}
+
+inline void Diarization::emit_pending()
+{
+  if(!m_emit_ready)
+    return;
+  outputs.num_speakers_out.value = m_emit_num_speakers;
+  for(const auto& s : m_emit_segments)
+    outputs.on_segment(s.start, s.end, s.speaker);
+  outputs.progress.value = 1.f;
+  // Move last: this empties m_emit_segments after the on_segment loop above.
+  outputs.segments.value = std::move(m_emit_segments);
+  m_emit_ready = false;
 }
 
 inline void Diarization::operator()(int frames)
@@ -215,6 +236,8 @@ inline void Diarization::operator()(int frames)
   if(m_was_recording && !rec_on)
     dispatch();
   m_was_recording = rec_on;
+
+  emit_pending(); // emit from the run() cycle so value outlets propagate
 }
 
 inline void Diarization::dispatch()
@@ -340,11 +363,10 @@ Diarization::worker::work(std::shared_ptr<Job> job)
       self.m_sd = job->sd;
       self.m_loaded_model = job->want_model;
     }
-    self.outputs.num_speakers_out.value = job->num_speakers;
-    for(const auto& s : job->segments)
-      self.outputs.on_segment(s.start, s.end, s.speaker);
-    self.outputs.segments.value = std::move(job->segments);
-    self.outputs.progress.value = 1.f;
+    // Stash for operator() to emit from the run() cycle (see emit_pending).
+    self.m_emit_num_speakers = job->num_speakers;
+    self.m_emit_segments = std::move(job->segments);
+    self.m_emit_ready = true;
     self.m_inflight.store(false, std::memory_order_release);
   };
 }

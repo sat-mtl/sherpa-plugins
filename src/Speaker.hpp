@@ -190,6 +190,22 @@ private:
   std::string m_requested_model, m_loaded_model;
   bool m_reload = false;
   bool m_was_capturing = false;
+
+  // Outputs must be emitted from operator() (the run() cycle), not from the async
+  // worker closure -- value outlets written outside run() do not propagate. apply()
+  // / identify() / update_count() now stash here (per-output flags, so the message
+  // handlers' count update works independently of the worker result); operator()
+  // flushes via emit_pending().
+  std::vector<float> m_emit_embedding;
+  std::string m_emit_speaker;
+  float m_emit_score = 0.f;
+  int m_emit_count = 0;
+  bool m_emit_have_embedding = false;
+  bool m_emit_have_speaker = false;
+  bool m_emit_have_score = false;
+  bool m_emit_have_count = false;
+
+  void emit_pending();
 };
 
 inline void Speaker::prepare(halp::setup info)
@@ -203,6 +219,32 @@ inline void Speaker::prepare(halp::setup info)
     m_job->samples.reserve(static_cast<std::size_t>(m_host_rate * 60.0));
     m_job->want_model.reserve(512);
     m_job->enroll_name.reserve(256);
+  }
+}
+
+inline void Speaker::emit_pending()
+{
+  // Emit from the run() cycle so the value outlets propagate. Per-output flags so
+  // a message handler's count update flushes independently of a worker result.
+  if(m_emit_have_embedding)
+  {
+    outputs.embedding.value = std::move(m_emit_embedding);
+    m_emit_have_embedding = false;
+  }
+  if(m_emit_have_score)
+  {
+    outputs.score.value = m_emit_score;
+    m_emit_have_score = false;
+  }
+  if(m_emit_have_speaker)
+  {
+    outputs.speaker(std::string_view{m_emit_speaker});
+    m_emit_have_speaker = false;
+  }
+  if(m_emit_have_count)
+  {
+    outputs.count.value = m_emit_count;
+    m_emit_have_count = false;
   }
 }
 
@@ -225,6 +267,8 @@ inline void Speaker::operator()(int frames)
   if(m_was_capturing && !cap)
     dispatch();
   m_was_capturing = cap;
+
+  emit_pending();
 }
 
 inline void Speaker::dispatch()
@@ -312,7 +356,8 @@ inline void Speaker::apply(Job& job)
     m_last_embedding = std::move(job.embedding);
     ensure_manager();
 
-    outputs.embedding.value = m_last_embedding;
+    m_emit_embedding = m_last_embedding;
+    m_emit_have_embedding = true;
 
     if(!job.enroll_name.empty())
     {
@@ -361,9 +406,10 @@ inline void Speaker::identify(const std::vector<float>& v, float threshold)
     {
       if(r->count > 0 && r->matches)
       {
-        outputs.score.value = r->matches[0].score;
-        outputs.speaker(
-            std::string_view{r->matches[0].name ? r->matches[0].name : ""});
+        m_emit_score = r->matches[0].score;
+        m_emit_have_score = true;
+        m_emit_speaker = r->matches[0].name ? r->matches[0].name : "";
+        m_emit_have_speaker = true;
       }
       L.SherpaOnnxSpeakerEmbeddingManagerFreeBestMatches(r);
     }
@@ -377,7 +423,8 @@ inline void Speaker::identify(const std::vector<float>& v, float threshold)
         m_manager->get(), v.data(), threshold);
     if(name)
     {
-      outputs.speaker(std::string_view{name});
+      m_emit_speaker = name;
+      m_emit_have_speaker = true;
       L.SherpaOnnxSpeakerEmbeddingManagerFreeSearch(name);
     }
   }
@@ -389,7 +436,8 @@ inline void Speaker::update_count()
   int n = 0;
   if(m_manager && *m_manager && L.SherpaOnnxSpeakerEmbeddingManagerNumSpeakers)
     n = L.SherpaOnnxSpeakerEmbeddingManagerNumSpeakers(m_manager->get());
-  outputs.count.value = n;
+  m_emit_count = n;
+  m_emit_have_count = true;
 }
 
 inline void Speaker::enroll(const std::string& name)
@@ -417,7 +465,8 @@ inline void Speaker::clear()
 {
   // No bulk-clear in the C API: drop the manager so it is recreated empty.
   m_manager.reset();
-  outputs.count.value = 0;
+  m_emit_count = 0;
+  m_emit_have_count = true;
 }
 
 }

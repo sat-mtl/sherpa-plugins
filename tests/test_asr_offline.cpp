@@ -59,7 +59,8 @@ TEST_CASE("Offline ASR transcribes a spoken utterance", "[asr][offline][workflow
     auto cb = OfflineRecognizer::worker::work(job);
     OfflineRecognizer obj;
     REQUIRE(cb);
-    cb(obj);
+    cb(obj); // the closure only stashes the result now...
+    obj(0);  // ...outputs are emitted from operator() (the run() cycle); flush it
     INFO("recognized: " << obj.outputs.text.value);
     REQUIRE_FALSE(obj.outputs.text.value.empty());
   }

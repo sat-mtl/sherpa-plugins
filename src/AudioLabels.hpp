@@ -131,6 +131,18 @@ private:
   Type m_loaded_type = Type::Auto;
   bool m_reload = false;
   bool m_was_listening = false;
+
+  // Outputs must be emitted from operator() (the run() cycle), not from the async
+  // worker closure -- value outlets written outside run() do not propagate.
+  std::vector<Label> m_emit_labels;
+  std::string m_emit_top_name;
+  float m_emit_top_score = 0.f;
+  std::string m_emit_language;
+  bool m_emit_have_top = false;
+  bool m_emit_have_lang = false;
+  bool m_emit_ready = false;
+
+  void emit_pending();
 };
 
 inline void AudioLabels::prepare(halp::setup info)
@@ -144,6 +156,18 @@ inline void AudioLabels::prepare(halp::setup info)
     m_job->samples.reserve(static_cast<std::size_t>(m_host_rate * 60.0));
     m_job->want_model.reserve(512);
   }
+}
+
+inline void AudioLabels::emit_pending()
+{
+  if(!m_emit_ready)
+    return;
+  outputs.labels.value = std::move(m_emit_labels);
+  if(m_emit_have_top)
+    outputs.top(std::string_view{m_emit_top_name}, m_emit_top_score);
+  if(m_emit_have_lang)
+    outputs.language(std::string_view{m_emit_language});
+  m_emit_ready = false;
 }
 
 inline void AudioLabels::operator()(int frames)
@@ -166,6 +190,8 @@ inline void AudioLabels::operator()(int frames)
   if(m_was_listening && !on)
     dispatch();
   m_was_listening = on;
+
+  emit_pending(); // emit from the run() cycle so value outlets propagate
 }
 
 inline void AudioLabels::dispatch()
@@ -346,11 +372,14 @@ AudioLabels::worker::work(std::shared_ptr<Job> job)
       self.m_loaded_model = job->want_model;
       self.m_loaded_type = job->type;
     }
-    self.outputs.labels.value = std::move(job->labels);
-    if(job->have_top)
-      self.outputs.top(std::string_view{job->top_name}, job->top_score);
-    if(job->have_lang)
-      self.outputs.language(std::string_view{job->language});
+    // Stash for operator() to emit from the run() cycle (see emit_pending).
+    self.m_emit_labels = std::move(job->labels);
+    self.m_emit_have_top = job->have_top;
+    self.m_emit_top_name = std::move(job->top_name);
+    self.m_emit_top_score = job->top_score;
+    self.m_emit_have_lang = job->have_lang;
+    self.m_emit_language = std::move(job->language);
+    self.m_emit_ready = true;
     self.m_inflight.store(false, std::memory_order_release);
   };
 }

@@ -103,6 +103,18 @@ private:
   MonoAccum m_accum;
   std::string m_requested_model, m_loaded_model;
   bool m_reload = false;
+
+  // Outputs must be emitted from operator() (the node run() cycle), not from the
+  // async worker-result closure: value outlets written outside run() never
+  // propagate to score's ports. The closure stashes here; operator() emits.
+  std::string m_emit_text;
+  std::vector<std::string> m_emit_tokens;
+  std::vector<float> m_emit_timestamps;
+  bool m_emit_ready = false;
+  bool m_emit_has_text = false;
+  bool m_emit_is_endpoint = false;
+
+  void emit_pending();
 };
 
 inline void OnlineRecognizer::prepare(halp::setup info)
@@ -117,6 +129,26 @@ inline void OnlineRecognizer::prepare(halp::setup info)
     m_job->want_model.reserve(512);
     m_job->text.reserve(1024);
   }
+}
+
+inline void OnlineRecognizer::emit_pending()
+{
+  if(!m_emit_ready)
+    return;
+  if(m_emit_has_text)
+  {
+    if(m_emit_is_endpoint)
+      outputs.final_text(std::string_view{m_emit_text});
+    else
+      outputs.partial(std::string_view{m_emit_text});
+  }
+  if(m_emit_is_endpoint)
+    outputs.endpoint();
+  if(!m_emit_tokens.empty())
+    outputs.tokens.value = std::move(m_emit_tokens);
+  if(!m_emit_timestamps.empty())
+    outputs.timestamps.value = std::move(m_emit_timestamps);
+  m_emit_ready = false;
 }
 
 inline void OnlineRecognizer::operator()(int frames)
@@ -134,6 +166,8 @@ inline void OnlineRecognizer::operator()(int frames)
 
   if(!m_inflight.load(std::memory_order_acquire) && (!m_accum.empty() || m_reload))
     dispatch();
+
+  emit_pending(); // emit from the run() cycle so value outlets propagate
 }
 
 inline void OnlineRecognizer::dispatch()
@@ -225,19 +259,13 @@ OnlineRecognizer::worker::work(std::shared_ptr<Job> job)
       self.m_stream = job->stream;
       self.m_loaded_model = job->want_model;
     }
-    if(job->has_text)
-    {
-      if(job->is_endpoint)
-        self.outputs.final_text(std::string_view{job->text});
-      else
-        self.outputs.partial(std::string_view{job->text});
-    }
-    if(job->is_endpoint)
-      self.outputs.endpoint();
-    if(!job->tokens.empty())
-      self.outputs.tokens.value = std::move(job->tokens);
-    if(!job->timestamps.empty())
-      self.outputs.timestamps.value = std::move(job->timestamps);
+    // Stash for operator() to emit from the run() cycle (see emit_pending).
+    self.m_emit_has_text = job->has_text;
+    self.m_emit_is_endpoint = job->is_endpoint;
+    self.m_emit_text = std::move(job->text);
+    self.m_emit_tokens = std::move(job->tokens);
+    self.m_emit_timestamps = std::move(job->timestamps);
+    self.m_emit_ready = true;
     self.m_inflight.store(false, std::memory_order_release);
   };
 }
