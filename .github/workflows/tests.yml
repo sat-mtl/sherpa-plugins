@@ -36,10 +36,13 @@ jobs:
       - name: Set BOOST_ROOT
         run: echo "BOOST_ROOT=$PWD/boost-1.88.0" >> "$GITHUB_ENV"
 
+      # Keep in step with SHERPA_ONNX_PREBUILT_TAG in cmake/sherpa-onnx.cmake.
       - name: Fetch prebuilt sherpa-onnx runtime library
+        env:
+          PREBUILT_TAG: prebuilt-v1.13.4-ort1.27.1
         run: |
           mkdir -p sherpa-rt && cd sherpa-rt
-          url="https://github.com/sat-mtl/sherpa-plugins/releases/download/prebuilt-v1.13.3/sherpa-onnx-cabi-linux-x64.tar.gz"
+          url="https://github.com/sat-mtl/sherpa-plugins/releases/download/${PREBUILT_TAG}/sherpa-onnx-cabi-linux-x64.tar.gz"
           curl -fsSL "$url" -o pkg.tgz
           tar xzf pkg.tgz && rm pkg.tgz
           echo "SHERPA_RT=$PWD" >> "$GITHUB_ENV"
