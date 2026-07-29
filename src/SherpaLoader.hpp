@@ -16,15 +16,16 @@
 // Windows SHERPA_ONNX_API expands to nothing (no dllimport) -- exactly what we
 // want for a dlopen'd library.
 
+#include "OnnxRuntimeLoader.hpp"
 #include "compat/dylib_loader.hpp"
-
-#include <sherpa-onnx/c-api/c-api.h>
 
 #include <cstdio>
 #include <memory>
 #include <string>
 #include <string_view>
 #include <vector>
+
+#include <sherpa-onnx/c-api/c-api.h>
 
 namespace sherpa
 {
@@ -229,7 +230,15 @@ private:
 
   SherpaLoader()
   {
-    m_paths.push_back(ossia::get_module_folder() + "/" + lib_name);
+    // Before the dlopen below: see OnnxRuntimeLoader.hpp. Not fatal if it fails,
+    // a standalone package resolves its bundled copy via $ORIGIN / @loader_path.
+    OnnxRuntimeLoader::instance();
+
+    const std::string mod = ossia::get_module_folder();
+    m_paths.push_back(mod + "/" + lib_name);
+    m_paths.push_back(mod + "/../" + lib_name);
+    m_paths.push_back(mod + "/../lib/" + lib_name);
+    m_paths.push_back(mod + "/../../Frameworks/" + lib_name);
     m_paths.push_back(ossia::get_exe_folder() + "/" + lib_name);
     m_paths.emplace_back(lib_name); // system search path as a last resort
 
@@ -244,8 +253,8 @@ private:
     }
     catch(const std::exception& e)
     {
-      std::fprintf(stderr, "sherpa-plugins: %s could not be loaded (%s)\n",
-                   lib_name, e.what());
+      std::fprintf(
+          stderr, "sherpa-plugins: %s could not be loaded (%s)\n", lib_name, e.what());
       available = false;
       return;
     }

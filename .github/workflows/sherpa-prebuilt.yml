@@ -5,19 +5,31 @@ name: sherpa-onnx prebuilt C API
 # the archives this addon consumes (cmake/sherpa-onnx.cmake, SHERPA_ONNX_FETCH_LIBS).
 #
 # Run manually (workflow_dispatch) to produce downloadable artifacts, or push a tag
-# `prebuilt-v<version>` to additionally create/attach a GitHub Release whose assets
-# are what cmake/sherpa-onnx.cmake fetches from
-#   https://github.com/sat-mtl/sherpa-plugins/releases/download/prebuilt-v<version>/
+# `prebuilt-v<sherpa>-ort<onnxruntime>` to additionally create/attach a GitHub
+# Release whose assets are what cmake/sherpa-onnx.cmake fetches from
+#   https://github.com/sat-mtl/sherpa-plugins/releases/download/<tag>/
 #
 # sherpa-onnx is built here with its supported toolchains (gcc / Apple-clang / MSVC)
 # so the clang-built addon never has to compile it.
+#
+# sherpa is pointed at the onnxruntime score deploys, via the
+# SHERPA_ONNXRUNTIME_{INCLUDE,LIB}_DIR environment variables upstream supports,
+# rather than downloading its own -- otherwise its library carries a different
+# SONAME, symbol version and install name and cannot bind to score's copy at all.
+# Keep ORT_VERSION in sync with the onnxruntime ossia score deploys, and with
+# SHERPA_ONNXRUNTIME_VERSION in cmake/sherpa-onnx.cmake. The CPU package is
+# enough: OrtGetApiBase is the sole import and the gpu_cuda13 package exports the
+# same VERS_<version>.
 
 on:
   workflow_dispatch:
     inputs:
       sherpa_version:
         description: "sherpa-onnx version to build (without leading v)"
-        default: "1.13.3"
+        default: "1.13.4"
+      ort_version:
+        description: "onnxruntime version to link against (must match ossia score)"
+        default: "1.27.1"
   push:
     tags: ["prebuilt-v*"]
 
@@ -25,8 +37,9 @@ permissions:
   contents: write
 
 env:
-  # Default version; overridden by the workflow_dispatch input or the tag name.
-  SHERPA_VERSION: "1.13.3"
+  # Default versions; overridden by the workflow_dispatch inputs or the tag name.
+  SHERPA_VERSION: "1.13.4"
+  ORT_VERSION: "1.27.1"
   # Bound the compile parallelism: GitHub runners have little RAM (7-16 GB) and
   # sherpa's heavy C++ TUs (kaldi / openfst / espeak / piper) OOM with an
   # unbounded `-j`. Keep this small.
@@ -40,15 +53,23 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { os: ubuntu-22.04,     triplet: linux-x64,    ext: tar.gz }
+          # ort_pkg: the Microsoft onnxruntime package to link against, per platform.
+          # ort_version overrides ORT_VERSION where score pins something else.
+          - { os: ubuntu-22.04,     triplet: linux-x64,    ext: tar.gz, ort_pkg: onnxruntime-linux-x64,     ort_ext: tgz }
           # arm64 Linux runner (may need org enablement); remove if unavailable.
-          - { os: ubuntu-24.04-arm, triplet: linux-arm64,  ext: tar.gz }
-          - { os: macos-14,         triplet: macos-arm64,  ext: tar.gz, osx_arch: arm64 }
-          # Intel mac is cross-compiled on the arm64 runner: macos-13 (Intel) runners
-          # are queue-starved / being retired. sherpa's cmake/onnxruntime.cmake fetches
-          # the x86_64 ORT when CMAKE_OSX_ARCHITECTURES=x86_64 on an arm64 host, so the
-          # whole build cross-compiles cleanly.
-          - { os: macos-14,         triplet: macos-x64,    ext: tar.gz, osx_arch: x86_64 }
+          - { os: ubuntu-24.04-arm, triplet: linux-arm64,  ext: tar.gz, ort_pkg: onnxruntime-linux-aarch64, ort_ext: tgz }
+          - { os: macos-14,         triplet: macos-arm64,  ext: tar.gz, osx_arch: arm64, ort_pkg: onnxruntime-osx-arm64, ort_ext: tgz }
+          # Intel mac is cross-compiled on the arm64 runner: macos-13 (Intel)
+          # runners are queue-starved / being retired. onnxruntime 1.23.2 is the
+          # last release supporting x64, so this lane links that instead of
+          # ORT_VERSION -- as score does.
+          - { os: macos-14,         triplet: macos-x64,    ext: tar.gz, osx_arch: x86_64, ort_pkg: onnxruntime-osx-universal2, ort_ext: tgz, ort_version: "1.23.2" }
+          # Windows keeps sherpa's own onnxruntime: PE has no symbol versioning
+          # and the import is already the plain name "onnxruntime.dll", so it
+          # already binds to whichever one is loaded. Supplying one is also broken
+          # upstream -- sherpa's cmake/onnxruntime.cmake reads
+          # ${location_onnxruntime_lib2} for IMPORTED_IMPLIB but only assigns it
+          # in its ENABLE_GPU branch.
           - { os: windows-2022,     triplet: windows-x64,  ext: zip }
     steps:
       - name: Resolve version
@@ -57,13 +78,37 @@ jobs:
           ref="${GITHUB_REF_NAME}"
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             v="${{ github.event.inputs.sherpa_version }}"
+            o="${{ github.event.inputs.ort_version }}"
+          elif [[ "$ref" == prebuilt-v*-ort* ]]; then
+            # prebuilt-v<sherpa>-ort<onnxruntime>
+            v="${ref#prebuilt-v}"; v="${v%%-ort*}"
+            o="${ref#*-ort}"
           elif [[ "$ref" == prebuilt-v* ]]; then
             v="${ref#prebuilt-v}"
+            o="${ORT_VERSION}"
           else
             v="${SHERPA_VERSION}"
+            o="${ORT_VERSION}"
           fi
           echo "VER=$v" >> "$GITHUB_ENV"
-          echo "Building sherpa-onnx v$v"
+          echo "ORT=$o" >> "$GITHUB_ENV"
+          echo "Building sherpa-onnx v$v against onnxruntime $o"
+
+      # Not run on Windows: see the matrix comment above.
+      - name: Fetch score's onnxruntime
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          v="${{ matrix.ort_version }}"
+          [ -n "$v" ] || v="${ORT}"
+          echo "ORT_EFF=$v" >> "$GITHUB_ENV"
+          url="https://github.com/microsoft/onnxruntime/releases/download/v${v}/${{ matrix.ort_pkg }}-${v}.${{ matrix.ort_ext }}"
+          echo "Fetching $url"
+          curl -fL --retry 3 -o ort.tgz "$url"
+          mkdir -p ort && tar xzf ort.tgz -C ort --strip-components=1
+          echo "SHERPA_ONNXRUNTIME_INCLUDE_DIR=${GITHUB_WORKSPACE}/ort/include" >> "$GITHUB_ENV"
+          echo "SHERPA_ONNXRUNTIME_LIB_DIR=${GITHUB_WORKSPACE}/ort/lib"         >> "$GITHUB_ENV"
+          ls -la ort/lib
 
       - name: Checkout sherpa-onnx
         uses: actions/checkout@v4
@@ -104,6 +149,62 @@ jobs:
         shell: bash
         working-directory: sherpa-onnx
         run: cmake --build build --config Release --target install --parallel "${BUILD_JOBS}"
+
+      - name: Verify the onnxruntime dependency
+        if: runner.os != 'Windows'
+        shell: bash
+        working-directory: dist/lib
+        run: |
+          # libsherpa-onnx-c-api must reference the same onnxruntime identity
+          # score deploys, or it can never bind to it.
+          if [[ "${{ runner.os }}" == "macOS" ]]; then
+            # Major-only install name from 1.26 on, full version before that.
+            otool -L libsherpa-onnx-c-api.dylib | grep onnxruntime
+            otool -L libsherpa-onnx-c-api.dylib \
+              | grep -qE "@rpath/libonnxruntime\.(1|${ORT_EFF})\.dylib"
+          else
+            readelf -d libsherpa-onnx-c-api.so | grep onnxruntime
+            nm -D --undefined-only libsherpa-onnx-c-api.so | grep OrtGetApiBase
+            readelf -d libsherpa-onnx-c-api.so | grep -q "libonnxruntime.so.1\]"
+            nm -D --undefined-only libsherpa-onnx-c-api.so \
+              | grep -q "OrtGetApiBase@VERS_${ORT_EFF}"
+          fi
+
+      - name: Normalize the packaged libraries
+        shell: bash
+        working-directory: dist
+        run: |
+          # espeak-ng's .pc leaks the runner's absolute paths and nothing consumes it.
+          rm -rf lib/pkgconfig
+          if [[ "${{ runner.os }}" == "Linux" ]]; then
+            # One real file under the SONAME: standalone packages bundle this, and
+            # three dereferenced copies would be 75 MB while a bare symlink dangles.
+            cd lib
+            if [ -L libonnxruntime.so.1 ]; then
+              real="$(readlink -f libonnxruntime.so.1)"
+              rm -f libonnxruntime.so libonnxruntime.so.1
+              mv "$real" libonnxruntime.so.1
+              rm -f libonnxruntime.so.1.*
+            fi
+            ls -la
+          elif [[ "${{ runner.os }}" == "macOS" ]]; then
+            cd lib
+            # Reaches Contents/Frameworks when loaded from Contents/MacOS/plugins.
+            for f in libsherpa-onnx-c-api.dylib libsherpa-onnx-cxx-api.dylib; do
+              [ -f "$f" ] && install_name_tool -add_rpath @loader_path/../../Frameworks "$f" || true
+            done
+            # Same as Linux, but keep whichever name libsherpa-onnx-c-api asks for:
+            # Microsoft ships up to three spellings, one or two of them real copies.
+            dep="$(otool -L libsherpa-onnx-c-api.dylib \
+                   | grep -o '@rpath/libonnxruntime[^ ]*\.dylib' | head -1)"
+            leaf="${dep#@rpath/}"
+            echo "libsherpa-onnx-c-api loads: $leaf"
+            real="$(readlink -f "$leaf")"
+            cp -f "$real" "__ort.tmp"
+            rm -f libonnxruntime*.dylib
+            mv "__ort.tmp" "$leaf"
+            ls -la
+          fi
 
       - name: Package (root = include/ lib/ [bin/])
         shell: bash

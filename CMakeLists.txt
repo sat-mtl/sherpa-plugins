@@ -141,6 +141,7 @@ sherpa_object(sherpa_source_separation SourceSeparation)
 # Carry the shared headers along so IDEs/the archive see them.
 target_sources(sherpa_plugins PRIVATE
     src/compat/dylib_loader.hpp
+    src/OnnxRuntimeLoader.hpp
     src/SherpaLoader.hpp
     src/helpers/Handles.hpp
     src/helpers/ModelConfig.hpp
@@ -154,30 +155,49 @@ avnd_addon_finalize(NAME sherpa_plugins
 # for score-addon-onnx, which the score host bundles). So when the runtime libs
 # were located (-DSHERPA_ONNX_DIR=<install-with-lib/> or -DSHERPA_ONNX_FETCH_LIBS=ON),
 # copy them next to the built plugin: the objects dlopen libsherpa-onnx-c-api from
-# their own module folder (get_module_folder()), and that library's $ORIGIN rpath
-# then resolves libonnxruntime beside it. Without this the plugin loads but every
-# object reports unavailable at runtime ("libsherpa-onnx-c-api.so ... not found").
-# Standalone back-ends get the libs via avnd_addon_package below instead.
+# their own module folder (get_module_folder()). Without this the plugin loads but
+# every object reports unavailable at runtime ("libsherpa-onnx-c-api.so ... not
+# found"). Standalone back-ends get the libs via avnd_addon_package below instead.
+# onnxruntime is not among them: see src/OnnxRuntimeLoader.hpp.
 if(AVND_ADDON_SCORE AND SHERPA_SUPPORT_FILES)
   add_custom_command(TARGET sherpa_plugins POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
             ${SHERPA_SUPPORT_FILES} "$<TARGET_FILE_DIR:sherpa_plugins>"
     COMMAND_EXPAND_LISTS VERBATIM
     COMMENT "sherpa-plugins: copying sherpa-onnx runtime libs next to the plugin")
+
+  # The POST_BUILD above only populates the build tree. Destinations match where
+  # score installs onnxruntime, so both end up in one directory.
+  if(SCORE_DEPLOYMENT_BUILD)
+    if(APPLE)
+      install(FILES ${SHERPA_SUPPORT_FILES}
+              DESTINATION "ossia score.app/Contents/Frameworks"
+              COMPONENT OssiaScore)
+    elseif(WIN32)
+      install(FILES ${SHERPA_SUPPORT_FILES}
+              DESTINATION "${SCORE_BIN_INSTALL_DIR}"
+              COMPONENT OssiaScore)
+    else()
+      install(FILES ${SHERPA_SUPPORT_FILES}
+              DESTINATION lib
+              COMPONENT OssiaScore)
+    endif()
+  endif()
 endif()
 
 # Standalone distributable packages: bundle the prebuilt sherpa shared libs into
 # the Max / TouchDesigner / Godot packages so each object dlopens them from beside
 # its own module. Ignored inside score (the host bundles them). NAME MUST equal the
 # GitHub repo name so the shared CI's "Prefer CMake-built package" step finds
-# build/package/<NAME>/.
+# build/package/<NAME>/. onnxruntime is bundled here, unlike in a score build:
+# these hosts provide none of their own.
 if(NOT AVND_ADDON_SCORE AND COMMAND avnd_addon_package)
   avnd_addon_package(
     NAME sherpa-plugins
     SOURCE_PATH "${CMAKE_CURRENT_SOURCE_DIR}"
     PACKAGE_ROOT "${CMAKE_BINARY_DIR}/package"
     BACKENDS max touchdesigner godot
-    SUPPORT ${SHERPA_SUPPORT_FILES})
+    SUPPORT ${SHERPA_SUPPORT_FILES} ${SHERPA_ORT_SUPPORT_FILES})
 endif()
 
 # --- Tests (Catch2) -------------------------------------------------------------
