@@ -12,7 +12,7 @@ jobs:
   tests:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install toolchain
         run: |
@@ -24,7 +24,7 @@ jobs:
       # provision headers ourselves (like the ossia/actions workflows do).
       - name: Cache Boost
         id: boost-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: boost-1.88.0
           key: boost-1.88.0-headers
@@ -47,7 +47,7 @@ jobs:
 
       - name: Cache test models
         id: models-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: models
           key: sherpa-test-models-v2
