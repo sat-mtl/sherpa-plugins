@@ -67,7 +67,7 @@ jobs:
           echo "Building sherpa-onnx v$v"
 
       - name: Checkout sherpa-onnx
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: k2-fsa/sherpa-onnx
           ref: v${{ env.VER }}
@@ -119,7 +119,7 @@ jobs:
           echo "Packaged:"; ls -la "$out"
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: sherpa-onnx-cabi-${{ matrix.triplet }}
           path: sherpa-onnx-cabi-${{ matrix.triplet }}.${{ matrix.ext }}
@@ -132,7 +132,7 @@ jobs:
     container: ubuntu:noble
     steps:
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: artifacts
           merge-multiple: true
