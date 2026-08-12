@@ -51,7 +51,8 @@ All inference, model loading and result allocation happen on an Avendish
 
 ```bash
 # Point at a locally-built sherpa-onnx shared install (lib/ + include/), or let
-# CMake fetch a prebuilt release once the asset URLs are wired in sherpa-onnx.cmake.
+# CMake fetch the prebuilt release for this version pair (SHERPA_ONNX_FETCH_LIBS,
+# on by default in a score build).
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
       -DSHERPA_ONNX_DIR=/path/to/sherpa-onnx-install
 cmake --build build
@@ -60,12 +61,63 @@ cmake --build build
 The same `CMakeLists.txt` also builds as an ossia/score addon when dropped into
 a score source tree (it reuses score's Avendish via `find_package(Avendish)`).
 
+Neither the download nor `SHERPA_ONNX_DIR` is needed to *compile*: compilation
+only uses the vendored C header. When the runtime library cannot be located CMake
+warns and keeps going, and the objects report themselves unavailable at run time.
+Pass `-DSHERPA_ONNX_REQUIRE_LIBS=ON` (implied by a score deployment build) to turn
+that into a configuration error, so a release is never packaged without it.
+
+Building the runtime library yourself, against the onnxruntime score deploys —
+this is the only way to get one before the `prebuilt-v<sherpa>-ort<ort>` release
+for the current version pair is published:
+
+```bash
+git clone --depth 1 -b v1.13.4 https://github.com/k2-fsa/sherpa-onnx src
+export SHERPA_ONNXRUNTIME_INCLUDE_DIR=<score-build>/_deps/onnxruntime-src/include
+export SHERPA_ONNXRUNTIME_LIB_DIR=<score-build>/_deps/onnxruntime-src/lib
+cmake -S src -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=ON \
+      -DSHERPA_ONNX_ENABLE_C_API=ON -DSHERPA_ONNX_ENABLE_TTS=ON \
+      -DSHERPA_ONNX_ENABLE_PYTHON=OFF -DSHERPA_ONNX_ENABLE_TESTS=OFF \
+      -DSHERPA_ONNX_ENABLE_BINARY=OFF -DSHERPA_ONNX_ENABLE_PORTAUDIO=OFF \
+      -DSHERPA_ONNX_ENABLE_WEBSOCKET=OFF -DSHERPA_ONNX_ENABLE_JNI=OFF \
+      -DCMAKE_INSTALL_PREFIX=$PWD/install
+cmake --build build --target install
+# Linux: the result must reference score's onnxruntime, not one of sherpa's own
+readelf -d install/lib/libsherpa-onnx-c-api.so | grep NEEDED   # libonnxruntime.so.1
+nm -D --undefined-only install/lib/libsherpa-onnx-c-api.so | grep Ort # @VERS_1.27.1
+```
+
+then configure score (or this addon) with `-DSHERPA_ONNX_DIR=<...>/install`.
+
 ## Runtime
 
-Each standalone package bundles `libsherpa-onnx-c-api.*` + `libonnxruntime.*`
-beside the module (via `avnd_addon_package(... SUPPORT ...)`); the loader finds
-them next to the plugin with `ossia::get_module_folder()`. TTS additionally needs
-the model's `espeak-ng-data/` directory (supplied with the model).
+`libsherpa-onnx-c-api` is `dlopen`'d at startup (`src/SherpaLoader.hpp`), never
+linked. It in turn *links* onnxruntime, so something has to provide one:
+
+* **In ossia score** — the host already deploys onnxruntime (in `lib/`,
+  `Contents/Frameworks` or `bin/` depending on the platform). The addon binds to
+  that copy: `src/OnnxRuntimeLoader.hpp` maps it *before* opening
+  `libsherpa-onnx-c-api`, so the latter's `DT_NEEDED` / `LC_LOAD_DYLIB` / import
+  resolves to the image already in the process — no rpath, nothing to copy into
+  the plugin folder, and one onnxruntime in the process rather than two. If
+  something else in the host loaded onnxruntime first, that image is reused
+  instead.
+* **Standalone (Max / TouchDesigner / Godot / pd)** — those hosts provide no
+  onnxruntime, so each package bundles `libsherpa-onnx-c-api.*` *and*
+  `libonnxruntime.*` beside the module (`avnd_addon_package(... SUPPORT ...)`).
+
+This is why the prebuilt archives are linked against the **same onnxruntime
+release score deploys** (`SHERPA_ONNXRUNTIME_VERSION` in
+`cmake/sherpa-onnx.cmake`); a different build has a different SONAME, symbol
+version and install name, and cannot bind to score's copy at all. If the host's onnxruntime turns out to be
+older than the one sherpa was built against, the objects report themselves
+unavailable instead of crashing.
+
+Set `SHERPA_ONNXRUNTIME_PATH` to override the search, and `SHERPA_PLUGINS_DEBUG=1`
+to print which library was resolved and where from.
+
+TTS additionally needs the model's `espeak-ng-data/` directory (supplied with the
+model).
 
 > Status: initial scaffold. Needs a first local compile pass; a few halp
 > member spellings (soundfile port) and the prebuilt-release asset URLs are
