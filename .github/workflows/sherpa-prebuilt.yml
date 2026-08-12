@@ -105,10 +105,25 @@ jobs:
           url="https://github.com/microsoft/onnxruntime/releases/download/v${v}/${{ matrix.ort_pkg }}-${v}.${{ matrix.ort_ext }}"
           echo "Fetching $url"
           curl -fL --retry 3 -o ort.tgz "$url"
-          mkdir -p ort && tar xzf ort.tgz -C ort --strip-components=1
-          echo "SHERPA_ONNXRUNTIME_INCLUDE_DIR=${GITHUB_WORKSPACE}/ort/include" >> "$GITHUB_ENV"
-          echo "SHERPA_ONNXRUNTIME_LIB_DIR=${GITHUB_WORKSPACE}/ort/lib"         >> "$GITHUB_ENV"
-          ls -la ort/lib
+          # Do NOT --strip-components: the layout is not the same across
+          # onnxruntime releases. 1.27.x archives are rooted at <pkg>/lib, while
+          # 1.23.2 (the macos-x64 lane) prefixes every entry with "./", which
+          # counts as the first component -- stripping one then lands a level
+          # short and lib/ is nowhere near where it was expected. Extract whole
+          # and find the directory that actually holds lib/.
+          mkdir -p ort && tar xzf ort.tgz -C ort
+          find ort -maxdepth 4 -type d -name lib > ort-libdirs.txt
+          libdir="$(head -1 ort-libdirs.txt)"
+          if [ -z "$libdir" ]; then
+            echo "::error::no lib/ directory inside $url"
+            find ort -maxdepth 3 | head -50
+            exit 1
+          fi
+          root="$(cd "$(dirname "$libdir")" && pwd)"
+          echo "onnxruntime package root: $root"
+          echo "SHERPA_ONNXRUNTIME_INCLUDE_DIR=${root}/include" >> "$GITHUB_ENV"
+          echo "SHERPA_ONNXRUNTIME_LIB_DIR=${root}/lib"         >> "$GITHUB_ENV"
+          ls -la "${root}/lib"
 
       - name: Checkout sherpa-onnx
         uses: actions/checkout@v4
