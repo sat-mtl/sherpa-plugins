@@ -160,11 +160,17 @@ avnd_addon_finalize(NAME sherpa_plugins
 # found"). Standalone back-ends get the libs via avnd_addon_package below instead.
 # onnxruntime is not among them: see src/OnnxRuntimeLoader.hpp.
 if(AVND_ADDON_SCORE AND SHERPA_SUPPORT_FILES)
+  # NOT into the plugin's own directory: score's PluginManager tries to load every
+  # shared library it finds there and logs `"libsherpa-onnx-c-api.so" is not a
+  # correct score plugin` for each. `<plugins>/../lib` is the third candidate
+  # SherpaLoader probes (mod, mod/.., mod/../lib, ...) and mirrors the installed
+  # Linux layout below, so the build tree resolves the library exactly as an
+  # installed score does.
   add_custom_command(TARGET sherpa_plugins POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            ${SHERPA_SUPPORT_FILES} "$<TARGET_FILE_DIR:sherpa_plugins>"
+            ${SHERPA_SUPPORT_FILES} "$<TARGET_FILE_DIR:sherpa_plugins>/../lib"
     COMMAND_EXPAND_LISTS VERBATIM
-    COMMENT "sherpa-plugins: copying sherpa-onnx runtime libs next to the plugin")
+    COMMENT "sherpa-plugins: copying sherpa-onnx runtime libs into <build>/lib")
 
   # The POST_BUILD above only populates the build tree. Destinations match where
   # score installs onnxruntime, so both end up in one directory.

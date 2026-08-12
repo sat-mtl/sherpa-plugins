@@ -51,7 +51,8 @@ All inference, model loading and result allocation happen on an Avendish
 
 ```bash
 # Point at a locally-built sherpa-onnx shared install (lib/ + include/), or let
-# CMake fetch a prebuilt release once the asset URLs are wired in sherpa-onnx.cmake.
+# CMake fetch the prebuilt release for this version pair (SHERPA_ONNX_FETCH_LIBS,
+# on by default in a score build).
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
       -DSHERPA_ONNX_DIR=/path/to/sherpa-onnx-install
 cmake --build build
@@ -59,6 +60,34 @@ cmake --build build
 
 The same `CMakeLists.txt` also builds as an ossia/score addon when dropped into
 a score source tree (it reuses score's Avendish via `find_package(Avendish)`).
+
+Neither the download nor `SHERPA_ONNX_DIR` is needed to *compile*: compilation
+only uses the vendored C header. When the runtime library cannot be located CMake
+warns and keeps going, and the objects report themselves unavailable at run time.
+Pass `-DSHERPA_ONNX_REQUIRE_LIBS=ON` (implied by a score deployment build) to turn
+that into a configuration error, so a release is never packaged without it.
+
+Building the runtime library yourself, against the onnxruntime score deploys —
+this is the only way to get one before the `prebuilt-v<sherpa>-ort<ort>` release
+for the current version pair is published:
+
+```bash
+git clone --depth 1 -b v1.13.4 https://github.com/k2-fsa/sherpa-onnx src
+export SHERPA_ONNXRUNTIME_INCLUDE_DIR=<score-build>/_deps/onnxruntime-src/include
+export SHERPA_ONNXRUNTIME_LIB_DIR=<score-build>/_deps/onnxruntime-src/lib
+cmake -S src -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=ON \
+      -DSHERPA_ONNX_ENABLE_C_API=ON -DSHERPA_ONNX_ENABLE_TTS=ON \
+      -DSHERPA_ONNX_ENABLE_PYTHON=OFF -DSHERPA_ONNX_ENABLE_TESTS=OFF \
+      -DSHERPA_ONNX_ENABLE_BINARY=OFF -DSHERPA_ONNX_ENABLE_PORTAUDIO=OFF \
+      -DSHERPA_ONNX_ENABLE_WEBSOCKET=OFF -DSHERPA_ONNX_ENABLE_JNI=OFF \
+      -DCMAKE_INSTALL_PREFIX=$PWD/install
+cmake --build build --target install
+# Linux: the result must reference score's onnxruntime, not one of sherpa's own
+readelf -d install/lib/libsherpa-onnx-c-api.so | grep NEEDED   # libonnxruntime.so.1
+nm -D --undefined-only install/lib/libsherpa-onnx-c-api.so | grep Ort # @VERS_1.27.1
+```
+
+then configure score (or this addon) with `-DSHERPA_ONNX_DIR=<...>/install`.
 
 ## Runtime
 
