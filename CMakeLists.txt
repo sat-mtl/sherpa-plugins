@@ -167,6 +167,10 @@ if(AVND_ADDON_SCORE AND SHERPA_SUPPORT_FILES)
   # Linux layout below, so the build tree resolves the library exactly as an
   # installed score does.
   add_custom_command(TARGET sherpa_plugins POST_BUILD
+    # <plugins>/../lib exists only in an installed score tree, and
+    # copy_if_different errors out on a missing destination directory.
+    COMMAND ${CMAKE_COMMAND} -E make_directory
+            "$<TARGET_FILE_DIR:sherpa_plugins>/../lib"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
             ${SHERPA_SUPPORT_FILES} "$<TARGET_FILE_DIR:sherpa_plugins>/../lib"
     COMMAND_EXPAND_LISTS VERBATIM
