@@ -8,12 +8,6 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 jobs:
-  # Build in/against ossia score: dev tree, SDK, JIT and release tracks (same
-  # four-track pipeline as score-addon-cv / score-addon-onnx). The addon ships
-  # a release.sh + addon.json, so the release track packages the source zip and
-  # uploads it on v* tags. The "latest"-SDK/JIT lanes need a released score that
-  # ships the unified avnd addon API; until then they behave like
-  # score-addon-cv's (continuous green, latest red).
   score:
     uses: ossia/actions/.github/workflows/score-addon.yml@master
     secrets: inherit
