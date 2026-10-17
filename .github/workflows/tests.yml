@@ -20,21 +20,21 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             g++-14 cmake ninja-build catch2 curl xz-utils
 
-      # Avendish requires Boost >= 1.87; ubuntu-24.04's apt Boost is 1.83, so
+      # Avendish requires Boost >= 1.90; ubuntu-24.04's apt Boost is 1.83, so
       # provision headers ourselves (like the ossia/actions workflows do).
       - name: Cache Boost
         id: boost-cache
         uses: actions/cache@v4
         with:
-          path: boost-1.88.0
-          key: boost-1.88.0-headers
+          path: boost-1.90.0
+          key: boost-1.90.0-headers
       - name: Provision Boost
         if: steps.boost-cache.outputs.cache-hit != 'true'
         run: |
-          curl -fsSL "https://github.com/boostorg/boost/releases/download/boost-1.88.0/boost-1.88.0-b2-nodocs.tar.xz" -o boost.tar.xz
+          curl -fsSL "https://github.com/boostorg/boost/releases/download/boost-1.90.0/boost-1.90.0-b2-nodocs.tar.xz" -o boost.tar.xz
           tar xf boost.tar.xz && rm -f boost.tar.xz
       - name: Set BOOST_ROOT
-        run: echo "BOOST_ROOT=$PWD/boost-1.88.0" >> "$GITHUB_ENV"
+        run: echo "BOOST_ROOT=$PWD/boost-1.90.0" >> "$GITHUB_ENV"
 
       # Keep in step with SHERPA_ONNX_PREBUILT_TAG in cmake/sherpa-onnx.cmake.
       - name: Fetch prebuilt sherpa-onnx runtime library
