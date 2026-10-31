@@ -147,6 +147,30 @@ cmake --build build-phonemizer --target install
 
 then configure score (or this addon) with `-DSHERPA_ONNX_DIR=<...>/install`.
 
+### Prebuilt libraries
+
+`.github/workflows/sherpa-prebuilt.yml` builds sherpa-onnx and the phonemizer
+for Linux (x64, arm64), macOS (arm64, x64) and Windows (x64), with the versions
+in `cmake/sherpa-onnx.cmake`, and publishes the archives as release assets:
+
+| Release | Holds | Updated |
+|---|---|---|
+| `prebuilt-v<sherpa>-ort<onnxruntime>` | the archives of that version pair | created the first time the pair is built, then never overwritten; push the tag again to rebuild it |
+| `prebuilt-continuous` | the latest archives from `main` | on each push to `main` that changes the phonemizer, the versions or the workflow |
+| `v<x.y.z>` | the archives built from that tag, next to the addon's own release assets | when the tag is pushed |
+
+Pull requests that touch those files build the archives as workflow artifacts
+without publishing them. The sherpa build is cached per version pair and
+platform, so only the phonemizer rebuilds when nothing else changed.
+
+CMake downloads `prebuilt-v<sherpa>-ort<onnxruntime>` by default. A source
+package made from a `v*` tag downloads that tag's archives instead (`release.sh`
+records the tag in `cmake/sherpa-onnx-prebuilt-tag.txt`), and falls back to the
+version-pair release while they are still building. Pass
+`-DSHERPA_ONNX_PREBUILT_TAG=prebuilt-continuous` for the latest ones; a download
+is kept per tag under `<build>/_deps/sherpa_onnx-prebuilt/`, so delete that
+folder to fetch a newer `prebuilt-continuous`.
+
 ## Runtime
 
 `libsherpa-onnx-c-api` is `dlopen`'d at startup (`src/SherpaLoader.hpp`), never

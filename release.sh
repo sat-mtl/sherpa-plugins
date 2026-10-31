@@ -8,8 +8,17 @@
 rm -rf release
 mkdir -p release
 
-cp -rf src cmake 3rdparty CMakeLists.txt addon.json README.md release/
+# phonemizer/ too: its header is part of the build (phonemizer/include).
+cp -rf src cmake 3rdparty phonemizer CMakeLists.txt addon.json README.md release/
 [ -f LICENSE ] && cp -f LICENSE release/
+
+# A package made from a v* tag downloads the prebuilt sherpa-onnx archives
+# attached to that same release (.github/workflows/sherpa-prebuilt.yml), falling
+# back to the version-pair release while they are still building. Any other
+# package uses the version-pair release (cmake/sherpa-onnx.cmake).
+if [[ "${GITHUB_REF_TYPE:-}" == "tag" && "${GITHUB_REF_NAME:-}" == v* ]]; then
+  echo "${GITHUB_REF_NAME}" > release/cmake/sherpa-onnx-prebuilt-tag.txt
+fi
 
 mv release score-addon-sherpa
 7z a score-addon-sherpa.zip score-addon-sherpa

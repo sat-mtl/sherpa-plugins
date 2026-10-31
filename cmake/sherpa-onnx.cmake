@@ -119,10 +119,26 @@ if(AVND_ADDON_SCORE AND EXISTS "${_sherpa_host_ort_file}")
   endif()
 endif()
 
-# Named after the release-wide onnxruntime; the macos-x64 asset inside is built
-# against the version above.
-set(SHERPA_ONNX_PREBUILT_TAG
-    "prebuilt-v${SHERPA_ONNX_VERSION}-ort${SHERPA_ONNXRUNTIME_VERSION}"
+# The release holding the prebuilt archives (.github/workflows/sherpa-prebuilt.yml
+# publishes them):
+#   prebuilt-v<sherpa>-ort<onnxruntime>  one per version pair, never rebuilt: the
+#                                        default. Named after the release-wide
+#                                        onnxruntime; the macos-x64 asset inside is
+#                                        built against the version above.
+#   v<x.y.z>                             the addon's own release: a source package
+#                                        made from that tag says so in
+#                                        cmake/sherpa-onnx-prebuilt-tag.txt
+#                                        (written by release.sh)
+#   prebuilt-continuous                  the latest build from main
+# A tag that has no archives (yet: they take a while to build after the tag is
+# pushed) falls back to the version-pair release.
+set(_sherpa_pair_tag "prebuilt-v${SHERPA_ONNX_VERSION}-ort${SHERPA_ONNXRUNTIME_VERSION}")
+set(_sherpa_default_tag "${_sherpa_pair_tag}")
+if(EXISTS "${CMAKE_CURRENT_LIST_DIR}/sherpa-onnx-prebuilt-tag.txt")
+  file(STRINGS "${CMAKE_CURRENT_LIST_DIR}/sherpa-onnx-prebuilt-tag.txt"
+       _sherpa_default_tag LIMIT_COUNT 1)
+endif()
+set(SHERPA_ONNX_PREBUILT_TAG "${_sherpa_default_tag}"
     CACHE STRING "Release tag holding the prebuilt sherpa-onnx C API archives")
 
 # --- Headers: always the vendored copy. Compilation needs nothing else. ---
@@ -141,10 +157,8 @@ if(SHERPA_ONNX_DIR)
   set(_sherpa_root "${SHERPA_ONNX_DIR}")
 elseif(SHERPA_ONNX_FETCH_LIBS)
   # Prebuilt C-API libraries produced by .github/workflows/sherpa-prebuilt.yml and
-  # published to this repo's releases under the tag prebuilt-v<version>. Each
+  # published to this repo's releases (see SHERPA_ONNX_PREBUILT_TAG above). Each
   # archive's root is include/ + lib/ (+ bin/ on Windows).
-  set(_base
-      "https://github.com/sat-mtl/sherpa-plugins/releases/download/${SHERPA_ONNX_PREBUILT_TAG}")
   if(WIN32)
     set(_triplet "windows-x64")
     set(_ext "zip")
@@ -162,7 +176,10 @@ elseif(SHERPA_ONNX_FETCH_LIBS)
     set(_triplet "linux-x64")
     set(_ext "tar.gz")
   endif()
-  set(_sherpa_url "${_base}/sherpa-onnx-cabi-${_triplet}.${_ext}")
+  set(_sherpa_tags "${SHERPA_ONNX_PREBUILT_TAG}")
+  if(NOT SHERPA_ONNX_PREBUILT_TAG STREQUAL _sherpa_pair_tag)
+    list(APPEND _sherpa_tags "${_sherpa_pair_tag}")
+  endif()
 
   # Downloaded by hand rather than through FetchContent: FetchContent turns any
   # download failure into a FATAL_ERROR, and this addon is configured as part of
@@ -170,9 +187,15 @@ elseif(SHERPA_ONNX_FETCH_LIBS)
   # must not take the entire score configure down with it. The stamp carries the
   # tag so a version bump re-downloads and a reconfigure does not.
   set(_sherpa_dl "${CMAKE_BINARY_DIR}/_deps/sherpa_onnx-prebuilt")
-  set(_sherpa_tree "${_sherpa_dl}/${SHERPA_ONNX_PREBUILT_TAG}")
-  set(_sherpa_stamp "${_sherpa_tree}/.extracted")
-  if(NOT EXISTS "${_sherpa_stamp}")
+  set(_sherpa_tried "")
+  foreach(_sherpa_tag IN LISTS _sherpa_tags)
+    set(_sherpa_url
+        "https://github.com/sat-mtl/sherpa-plugins/releases/download/${_sherpa_tag}/sherpa-onnx-cabi-${_triplet}.${_ext}")
+    set(_sherpa_tree "${_sherpa_dl}/${_sherpa_tag}")
+    set(_sherpa_stamp "${_sherpa_tree}/.extracted")
+    if(EXISTS "${_sherpa_stamp}")
+      break()
+    endif()
     set(_sherpa_archive "${_sherpa_dl}/sherpa-onnx-cabi-${_triplet}.${_ext}")
     message(STATUS "sherpa-plugins: downloading ${_sherpa_url}")
     file(DOWNLOAD "${_sherpa_url}" "${_sherpa_archive}"
@@ -195,27 +218,32 @@ elseif(SHERPA_ONNX_FETCH_LIBS)
            DESTINATION "${_sherpa_tree}")
       file(REMOVE "${_sherpa_archive}")
       file(TOUCH "${_sherpa_stamp}")
-    else()
-      list(GET _sherpa_dl_status 1 _sherpa_dl_message)
-      # An empty/partial file is left behind on failure; do not keep it around.
-      file(REMOVE "${_sherpa_archive}")
-      set(_sherpa_dl_error
-          "sherpa-plugins: could not download the prebuilt sherpa-onnx runtime "
-          "libraries from ${_sherpa_url} (${_sherpa_dl_message}). The release "
-          "'${SHERPA_ONNX_PREBUILT_TAG}' is produced by "
-          ".github/workflows/sherpa-prebuilt.yml -- push that tag to publish it. "
-          "Meanwhile, build sherpa-onnx ${SHERPA_ONNX_VERSION} against "
-          "onnxruntime ${_sherpa_ort_version} and pass -DSHERPA_ONNX_DIR=<install> "
-          "(see the header of cmake/sherpa-onnx.cmake).")
-      string(JOIN "" _sherpa_dl_error ${_sherpa_dl_error})
-      if(SHERPA_ONNX_REQUIRE_LIBS)
-        message(FATAL_ERROR "${_sherpa_dl_error}")
-      endif()
-      message(WARNING
-          "${_sherpa_dl_error} Configuring anyway: the plugin builds, but every "
-          "sherpa object reports unavailable at run time.")
-      set(_sherpa_reported 1)
+      break()
     endif()
+    list(GET _sherpa_dl_status 1 _sherpa_dl_message)
+    # An empty/partial file is left behind on failure; do not keep it around.
+    file(REMOVE "${_sherpa_archive}")
+    list(APPEND _sherpa_tried "${_sherpa_url} (${_sherpa_dl_message})")
+    message(STATUS "sherpa-plugins: not available: ${_sherpa_url} (${_sherpa_dl_message})")
+  endforeach()
+
+  if(NOT EXISTS "${_sherpa_stamp}")
+    list(JOIN _sherpa_tried ", " _sherpa_tried)
+    set(_sherpa_dl_error
+        "sherpa-plugins: could not download the prebuilt sherpa-onnx runtime "
+        "libraries: ${_sherpa_tried}. They are published by "
+        ".github/workflows/sherpa-prebuilt.yml (on each push to main, and per "
+        "tag). Meanwhile, build sherpa-onnx ${SHERPA_ONNX_VERSION} against "
+        "onnxruntime ${_sherpa_ort_version} and pass -DSHERPA_ONNX_DIR=<install> "
+        "(see the header of cmake/sherpa-onnx.cmake).")
+    string(JOIN "" _sherpa_dl_error ${_sherpa_dl_error})
+    if(SHERPA_ONNX_REQUIRE_LIBS)
+      message(FATAL_ERROR "${_sherpa_dl_error}")
+    endif()
+    message(WARNING
+        "${_sherpa_dl_error} Configuring anyway: the plugin builds, but every "
+        "sherpa object reports unavailable at run time.")
+    set(_sherpa_reported 1)
   endif()
   if(EXISTS "${_sherpa_stamp}")
     set(_sherpa_root "${_sherpa_tree}")

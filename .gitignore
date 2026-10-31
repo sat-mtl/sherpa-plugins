@@ -31,3 +31,6 @@ Makefile
 package/
 # release.sh staging
 score-addon-sherpa/
+
+# Written by release.sh into tagged source packages only
+cmake/sherpa-onnx-prebuilt-tag.txt
