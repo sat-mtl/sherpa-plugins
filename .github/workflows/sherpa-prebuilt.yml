@@ -6,13 +6,30 @@ name: sherpa-onnx prebuilt C API
 # which sherpa-onnx no longer bundles), and publishes the archives this addon
 # consumes (cmake/sherpa-onnx.cmake, SHERPA_ONNX_FETCH_LIBS).
 #
-# The sherpa version is a release ("1.13.8" -> tag v1.13.8) or an unreleased
-# snapshot "<last release>-<commit>" ("1.13.8-a63f821" -> that commit).
+# The versions come from cmake/sherpa-onnx.cmake (SHERPA_ONNX_VERSION,
+# SHERPA_ONNXRUNTIME_VERSION): bump them there and this rebuilds. The sherpa
+# version is a release ("1.13.8" -> tag v1.13.8) or an unreleased snapshot
+# "<last release>-<commit>" ("1.13.8-a63f821" -> that commit).
 #
-# Run manually (workflow_dispatch) to produce downloadable artifacts, or push a tag
-# `prebuilt-v<sherpa>-ort<onnxruntime>` to additionally create/attach a GitHub
-# Release whose assets are what cmake/sherpa-onnx.cmake fetches from
-#   https://github.com/sat-mtl/sherpa-plugins/releases/download/<tag>/
+# Where the archives go:
+#   push to main      -> the `prebuilt-continuous` pre-release (assets replaced:
+#                        always the latest prebuilts), and the
+#                        `prebuilt-v<sherpa>-ort<onnxruntime>` release if that
+#                        version pair has none yet (never overwritten after)
+#   push a v* tag     -> that tag's release (same as the addon's own release), and
+#                        the version-pair release if missing
+#   push a prebuilt-v<sherpa>-ort<ort> tag -> that release (an explicit rebuild)
+#   pull request      -> artifacts only, to check the build
+#   workflow_dispatch -> artifacts only, for any version pair
+# cmake/sherpa-onnx.cmake downloads the version-pair release by default; a source
+# package made from a v* tag downloads that tag's own (see release.sh), and
+# -DSHERPA_ONNX_PREBUILT_TAG=prebuilt-continuous picks the latest. (Not the
+# `continuous` release: ossia/actions deletes and recreates that one on every
+# push to main, which would drop these archives whenever they are not rebuilt.)
+#
+# Pushes and pull requests only rebuild when what goes into the archives changes
+# (paths below); tags always build. The sherpa build itself is cached per
+# version pair and platform, so a phonemizer change only rebuilds the phonemizer.
 #
 # sherpa-onnx is built here with its supported toolchains (gcc / Apple-clang / MSVC)
 # so the clang-built addon never has to compile it.
@@ -21,38 +38,88 @@ name: sherpa-onnx prebuilt C API
 # SHERPA_ONNXRUNTIME_{INCLUDE,LIB}_DIR environment variables upstream supports,
 # rather than downloading its own -- otherwise its library carries a different
 # SONAME, symbol version and install name and cannot bind to score's copy at all.
-# Keep ORT_VERSION in sync with the onnxruntime ossia score deploys, and with
-# SHERPA_ONNXRUNTIME_VERSION in cmake/sherpa-onnx.cmake. The CPU package is
-# enough: OrtGetApiBase is the sole import and the gpu_cuda13 package exports the
-# same VERS_<version>.
+# The CPU package is enough: OrtGetApiBase is the sole import and the gpu_cuda13
+# package exports the same VERS_<version>.
 
 on:
   workflow_dispatch:
     inputs:
       sherpa_version:
-        description: "sherpa-onnx version to build (without leading v; <release>-<commit> for a snapshot)"
-        default: "1.13.8-a63f821"
+        description: "sherpa-onnx version to build (without leading v; <release>-<commit> for a snapshot). Empty: the one in cmake/sherpa-onnx.cmake"
+        default: ""
       ort_version:
-        description: "onnxruntime version to link against (must match ossia score)"
-        default: "1.27.1"
+        description: "onnxruntime version to link against (must match ossia score). Empty: the one in cmake/sherpa-onnx.cmake"
+        default: ""
   push:
-    tags: ["prebuilt-v*"]
+    branches: [main, master]
+    tags: ["v*", "prebuilt-v*"]
+    paths:
+      - "phonemizer/**"
+      - "cmake/sherpa-onnx.cmake"
+      - "3rdparty/sherpa-onnx/**"
+      - ".github/workflows/sherpa-prebuilt.yml"
+  pull_request:
+    paths:
+      - "phonemizer/**"
+      - "cmake/sherpa-onnx.cmake"
+      - "3rdparty/sherpa-onnx/**"
+      - ".github/workflows/sherpa-prebuilt.yml"
+
+# One publication per ref at a time: two runs on main must not interleave their
+# uploads to `prebuilt-continuous`.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: write
 
 env:
-  # Default versions; overridden by the workflow_dispatch inputs or the tag name.
-  SHERPA_VERSION: "1.13.8-a63f821"
-  ORT_VERSION: "1.27.1"
   # Bound the compile parallelism: GitHub runners have little RAM (7-16 GB) and
   # sherpa's heavy C++ TUs (kaldi / openfst) OOM with an
   # unbounded `-j`. Keep this small.
   BUILD_JOBS: "2"
 
 jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    outputs:
+      sherpa: ${{ steps.v.outputs.sherpa }}
+      ort: ${{ steps.v.outputs.ort }}
+      pair: ${{ steps.v.outputs.pair }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Resolve the version pair
+        id: v
+        shell: bash
+        run: |
+          # The single source of truth: cmake/sherpa-onnx.cmake
+          cm=cmake/sherpa-onnx.cmake
+          v="$(sed -n 's/^set(SHERPA_ONNX_VERSION "\([^"]*\)".*/\1/p' "$cm")"
+          o="$(sed -n 's/^set(SHERPA_ONNXRUNTIME_VERSION "\([^"]*\)".*/\1/p' "$cm")"
+          ref="${GITHUB_REF_NAME}"
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            [ -n "${{ github.event.inputs.sherpa_version }}" ] && v="${{ github.event.inputs.sherpa_version }}"
+            [ -n "${{ github.event.inputs.ort_version }}" ] && o="${{ github.event.inputs.ort_version }}"
+          elif [[ "${GITHUB_REF}" == refs/tags/prebuilt-v*-ort* ]]; then
+            # prebuilt-v<sherpa>-ort<onnxruntime>
+            v="${ref#prebuilt-v}"; v="${v%%-ort*}"
+            o="${ref#*-ort}"
+          elif [[ "${GITHUB_REF}" == refs/tags/prebuilt-v* ]]; then
+            v="${ref#prebuilt-v}"
+          fi
+          if [ -z "$v" ] || [ -z "$o" ]; then
+            echo "::error::could not read the versions from $cm"
+            exit 1
+          fi
+          echo "sherpa=$v" >> "$GITHUB_OUTPUT"
+          echo "ort=$o" >> "$GITHUB_OUTPUT"
+          echo "pair=prebuilt-v${v}-ort${o}" >> "$GITHUB_OUTPUT"
+          echo "Building sherpa-onnx $v against onnxruntime $o"
+
   build:
     name: ${{ matrix.triplet }}
+    needs: resolve
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -77,27 +144,11 @@ jobs:
           # in its ENABLE_GPU branch.
           - { os: windows-2022,     triplet: windows-x64,  ext: zip }
     steps:
-      - name: Resolve version
+      - name: Versions
         shell: bash
         run: |
-          ref="${GITHUB_REF_NAME}"
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            v="${{ github.event.inputs.sherpa_version }}"
-            o="${{ github.event.inputs.ort_version }}"
-          elif [[ "$ref" == prebuilt-v*-ort* ]]; then
-            # prebuilt-v<sherpa>-ort<onnxruntime>
-            v="${ref#prebuilt-v}"; v="${v%%-ort*}"
-            o="${ref#*-ort}"
-          elif [[ "$ref" == prebuilt-v* ]]; then
-            v="${ref#prebuilt-v}"
-            o="${ORT_VERSION}"
-          else
-            v="${SHERPA_VERSION}"
-            o="${ORT_VERSION}"
-          fi
-          echo "VER=$v" >> "$GITHUB_ENV"
-          echo "ORT=$o" >> "$GITHUB_ENV"
-          echo "Building sherpa-onnx v$v against onnxruntime $o"
+          echo "VER=${{ needs.resolve.outputs.sherpa }}" >> "$GITHUB_ENV"
+          echo "ORT=${{ needs.resolve.outputs.ort }}" >> "$GITHUB_ENV"
 
       # Not run on Windows: see the matrix comment above.
       - name: Fetch score's onnxruntime
@@ -130,7 +181,18 @@ jobs:
           echo "SHERPA_ONNXRUNTIME_LIB_DIR=${root}/lib"         >> "$GITHUB_ENV"
           ls -la "${root}/lib"
 
+      # The sherpa build is the slow part (most of an hour per platform) and only
+      # depends on the version pair: keep it, so a phonemizer change, a new tag
+      # or a rebuild of `prebuilt-continuous` only builds the phonemizer.
+      - name: Cache the sherpa-onnx build
+        id: sherpa-cache
+        uses: actions/cache@v4
+        with:
+          path: sherpa-install
+          key: sherpa-install-v1-${{ matrix.triplet }}-${{ env.VER }}-ort${{ env.ORT_EFF || env.ORT }}
+
       - name: Checkout sherpa-onnx
+        if: steps.sherpa-cache.outputs.cache-hit != 'true'
         shell: bash
         run: |
           # actions/checkout cannot take an abbreviated commit, so clone (blobless:
@@ -151,6 +213,7 @@ jobs:
           path: sherpa-plugins
 
       - name: Configure
+        if: steps.sherpa-cache.outputs.cache-hit != 'true'
         shell: bash
         working-directory: sherpa-onnx
         run: |
@@ -166,7 +229,7 @@ jobs:
             -DSHERPA_ONNX_ENABLE_PORTAUDIO=OFF
             -DSHERPA_ONNX_ENABLE_WEBSOCKET=OFF
             -DSHERPA_ONNX_ENABLE_JNI=OFF
-            "-DCMAKE_INSTALL_PREFIX=${GITHUB_WORKSPACE}/dist"
+            "-DCMAKE_INSTALL_PREFIX=${GITHUB_WORKSPACE}/sherpa-install"
           )
           # macOS: pin the target arch (arm64 native, x86_64 cross-compiled on arm).
           if [[ -n "${{ matrix.osx_arch }}" ]]; then
@@ -179,9 +242,16 @@ jobs:
           fi
 
       - name: Build & install
+        if: steps.sherpa-cache.outputs.cache-hit != 'true'
         shell: bash
         working-directory: sherpa-onnx
         run: cmake --build build --config Release --target install --parallel "${BUILD_JOBS}"
+
+      - name: Stage the sherpa-onnx install
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp -a sherpa-install/. dist/
 
       # Same toolchain and target arch as sherpa above; lands in the same dist/.
       - name: Build & install the phonemizer
@@ -284,20 +354,59 @@ jobs:
           path: sherpa-onnx-cabi-${{ matrix.triplet }}.${{ matrix.ext }}
           if-no-files-found: error
 
-  release:
-    needs: build
-    if: startsWith(github.ref, 'refs/tags/prebuilt-v')
+  publish:
+    needs: [resolve, build]
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PAIR: ${{ needs.resolve.outputs.pair }}
     steps:
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
           path: artifacts
           merge-multiple: true
-      - name: Create / update release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ github.ref_name }}
-          name: sherpa-onnx prebuilt C API (${{ github.ref_name }})
-          files: artifacts/*
-          fail_on_unmatched_files: true
+
+      - name: Publish
+        shell: bash
+        run: |
+          set -euo pipefail
+          repo="${GITHUB_REPOSITORY}"
+          ls -la artifacts
+
+          # Upload to a release, creating it first when there is none. The addon's
+          # own release job may be creating the same v* release at the same time:
+          # a failed create is fine as long as the release then exists.
+          upload() {
+            local tag="$1" title="$2" pre="$3"
+            if ! gh release view "$tag" -R "$repo" >/dev/null 2>&1; then
+              local flags=(--title "$title" --notes "" --target "$GITHUB_SHA" --latest=false)
+              [ "$pre" = 1 ] && flags+=(--prerelease)
+              gh release create "$tag" -R "$repo" "${flags[@]}" \
+                || gh release view "$tag" -R "$repo" >/dev/null
+            fi
+            gh release upload "$tag" -R "$repo" --clobber artifacts/*
+            echo "Published to $tag"
+          }
+
+          # The version-pair release is what cmake/sherpa-onnx.cmake downloads by
+          # default: created once per pair, then left alone so a build keeps
+          # getting the same libraries. Push its tag again to rebuild it.
+          pair_missing=0
+          gh release view "$PAIR" -R "$repo" >/dev/null 2>&1 || pair_missing=1
+
+          case "$GITHUB_REF" in
+            refs/tags/prebuilt-v*)
+              upload "$GITHUB_REF_NAME" "sherpa-onnx prebuilt C API ($GITHUB_REF_NAME)" 0
+              ;;
+            refs/tags/v*)
+              upload "$GITHUB_REF_NAME" "$GITHUB_REF_NAME" 0
+              [ "$pair_missing" = 1 ] && upload "$PAIR" "sherpa-onnx prebuilt C API ($PAIR)" 0
+              ;;
+            refs/heads/*)
+              upload prebuilt-continuous "sherpa-onnx prebuilt C API (latest from ${GITHUB_REF_NAME})" 1
+              [ "$pair_missing" = 1 ] && upload "$PAIR" "sherpa-onnx prebuilt C API ($PAIR)" 0
+              ;;
+          esac
+          true

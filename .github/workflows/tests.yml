@@ -36,14 +36,26 @@ jobs:
       - name: Set BOOST_ROOT
         run: echo "BOOST_ROOT=$PWD/boost-1.88.0" >> "$GITHUB_ENV"
 
-      # Keep in step with SHERPA_ONNX_PREBUILT_TAG in cmake/sherpa-onnx.cmake.
+      # The version-pair release cmake/sherpa-onnx.cmake downloads by default,
+      # or, while that pair has not been published yet (its first push to main
+      # publishes it), the latest prebuilts from main.
       - name: Fetch prebuilt sherpa-onnx runtime library
-        env:
-          PREBUILT_TAG: prebuilt-v1.13.8-a63f821-ort1.27.1
         run: |
+          cm=cmake/sherpa-onnx.cmake
+          v="$(sed -n 's/^set(SHERPA_ONNX_VERSION "\([^"]*\)".*/\1/p' "$cm")"
+          o="$(sed -n 's/^set(SHERPA_ONNXRUNTIME_VERSION "\([^"]*\)".*/\1/p' "$cm")"
           mkdir -p sherpa-rt && cd sherpa-rt
-          url="https://github.com/sat-mtl/sherpa-plugins/releases/download/${PREBUILT_TAG}/sherpa-onnx-cabi-linux-x64.tar.gz"
-          curl -fsSL "$url" -o pkg.tgz
+          for tag in "prebuilt-v${v}-ort${o}" prebuilt-continuous; do
+            url="https://github.com/sat-mtl/sherpa-plugins/releases/download/${tag}/sherpa-onnx-cabi-linux-x64.tar.gz"
+            if curl -fsSL "$url" -o pkg.tgz; then
+              echo "Using $tag"
+              [ "$tag" = prebuilt-continuous ] && \
+                echo "::warning::prebuilt-v${v}-ort${o} is not published yet: testing against prebuilt-continuous"
+              break
+            fi
+            rm -f pkg.tgz
+          done
+          [ -f pkg.tgz ] || { echo "::error::no prebuilt sherpa-onnx archive found"; exit 1; }
           tar xzf pkg.tgz && rm pkg.tgz
           echo "SHERPA_RT=$PWD" >> "$GITHUB_ENV"
           echo "LD_LIBRARY_PATH=$PWD/lib:${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
