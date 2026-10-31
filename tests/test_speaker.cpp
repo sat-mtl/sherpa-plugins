@@ -13,6 +13,8 @@
 
 #include <catch2/catch_all.hpp>
 
+#include <cmath>
+
 #include <string>
 #include <vector>
 
@@ -81,6 +83,7 @@ TEST_CASE("Speaker embeds, identifies its own voice, and rejects noise",
   // 2) Enroll the voice, then identify the SAME voice -> must match.
   capture_clip(obj, audio, block, "alice");
   REQUIRE(obj.outputs.count.value >= 1);
+  const std::vector<float> enrolled = obj.outputs.embedding.value;
 
   matched.clear();
   capture_clip(obj, audio, block, ""); // identify same voice
@@ -93,4 +96,17 @@ TEST_CASE("Speaker embeds, identifies its own voice, and rejects noise",
   capture_clip(obj, noise, block, ""); // identify noise
   INFO("noise-identify matched: '" << matched << "'");
   CHECK(matched != "alice"); // no false accept (empty, or a non-match)
+
+  // 4) "get alice" outputs the enrolled embedding (stored L2-normalized).
+  obj.get("alice");
+  test::drive_silence(obj, block);
+  REQUIRE(obj.outputs.embedding.value.size() == enrolled.size());
+  double norm = 0.;
+  for(float x : enrolled)
+    norm += double(x) * x;
+  norm = std::sqrt(norm);
+  REQUIRE(norm > 0.);
+  for(std::size_t i = 0; i < enrolled.size(); ++i)
+    CHECK(obj.outputs.embedding.value[i]
+          == Catch::Approx(enrolled[i] / norm).margin(1e-5));
 }

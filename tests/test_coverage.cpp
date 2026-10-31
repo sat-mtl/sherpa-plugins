@@ -3,6 +3,7 @@
 // name (SHERPA_OPT loads silently) and proves we cover 100% of the workflows.
 #include "TestHelpers.hpp"
 
+#include "PhonemizerLoader.hpp"
 #include "SherpaLoader.hpp"
 
 #include <catch2/catch_all.hpp>
@@ -34,4 +35,17 @@ TEST_CASE("Every sherpa-onnx feature entry point is wired", "[coverage]")
   CHECK(L.SherpaOnnxCreateOfflineSpeechDenoiser);
   CHECK(L.SherpaOnnxCreateOnlineSpeechDenoiser);
   CHECK(L.SherpaOnnxCreateOfflineSourceSeparation);
+
+  // Newer entry points the objects use.
+  CHECK(L.SherpaOnnxGetOnnxruntimeVersionStr);
+  CHECK(L.SherpaOnnxOfflineTtsLang);
+  CHECK(L.SherpaOnnxSpeakerEmbeddingManagerGetEmbedding);
+}
+
+TEST_CASE("The phonemizer library is shipped beside sherpa-onnx", "[coverage]")
+{
+  if(!test::loader_ready())
+    SHERPA_SKIP("sherpa-onnx runtime library not available");
+  // Models without a lexicon cannot speak without it.
+  CHECK(PhonemizerLoader::instance().available);
 }

@@ -39,7 +39,7 @@ jobs:
       # Keep in step with SHERPA_ONNX_PREBUILT_TAG in cmake/sherpa-onnx.cmake.
       - name: Fetch prebuilt sherpa-onnx runtime library
         env:
-          PREBUILT_TAG: prebuilt-v1.13.4-ort1.27.1
+          PREBUILT_TAG: prebuilt-v1.13.8-a63f821-ort1.27.1
         run: |
           mkdir -p sherpa-rt && cd sherpa-rt
           url="https://github.com/sat-mtl/sherpa-plugins/releases/download/${PREBUILT_TAG}/sherpa-onnx-cabi-linux-x64.tar.gz"
@@ -53,7 +53,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: models
-          key: sherpa-test-models-v2
+          key: sherpa-test-models-v3
 
       - name: Download test models (best-effort)
         if: steps.models-cache.outputs.cache-hit != 'true'
@@ -81,6 +81,7 @@ jobs:
           get "$SS/sherpa-onnx-spleeter-2stems-fp16.tar.bz2"
           getf "$SR/3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx" spk
           getf "$SE/gtcrn_simple.onnx" denoise
+          getf "$SE/dpdfnet2.onnx" dpdfnet
           get "$SG/sherpa-onnx-pyannote-segmentation-3-0.tar.bz2"
           # diarization needs segmentation + a speaker embedding model in one dir
           if [ -d sherpa-onnx-pyannote-segmentation-3-0 ]; then
@@ -107,6 +108,7 @@ jobs:
           exp SHERPA_TEST_SOURCESEP_MODEL    sherpa-onnx-spleeter-2stems-fp16
           ls spk/*.onnx     >/dev/null 2>&1 && echo "SHERPA_TEST_SPEAKER_MODEL=$PWD/spk" >> "$GITHUB_ENV"
           ls denoise/*.onnx >/dev/null 2>&1 && echo "SHERPA_TEST_DENOISER_MODEL=$PWD/denoise" >> "$GITHUB_ENV"
+          ls dpdfnet/*.onnx >/dev/null 2>&1 && echo "SHERPA_TEST_DPDFNET_MODEL=$PWD/dpdfnet" >> "$GITHUB_ENV"
           if ls sherpa-onnx-pyannote-segmentation-3-0/*3dspeaker*.onnx >/dev/null 2>&1; then
             echo "SHERPA_TEST_DIARIZATION_MODEL=$PWD/sherpa-onnx-pyannote-segmentation-3-0" >> "$GITHUB_ENV"
           fi

@@ -25,7 +25,9 @@ Every `SherpaOnnxCreate*` entry point is asserted resolved by `tests/test_covera
 
 ## Model families & validation status
 
-Two independent axes, enumerated against the pinned **sherpa-onnx 1.13.3** C-API:
+Two independent axes, enumerated against the pinned **sherpa-onnx 1.13.8-a63f821**
+C-API (an unreleased master snapshot, the first with the espeak-ng-free TTS
+frontend):
 
 - **Code** — can an object reach the family? Filename auto-detect, plus a
   `Model type` (ASR) / `Type` (text, labels) / `Mode` (denoiser) override so any
@@ -39,17 +41,17 @@ bandwidth choice, not a code gap. Expanding is just adding a model to `tests.yml
 
 | Feature | Families reachable in code | CI-validated | Not wired |
 |---|---|---|---|
-| **Offline ASR** (18 in API) | transducer, paraformer, whisper, sense-voice, moonshine, fire-red-asr, canary, telespeech, wenet-ctc, dolphin, zipformer-ctc, nemo-ctc, **tdnn, omnilingual, medasr, fire-red-ctc, cohere** — all auto-detected; force any with the **`Model type`** port | whisper (whisper-tiny.en) | **funasr-nano** (LLM multi-file pipeline: encoder-adaptor + llm + embedding + tokenizer + prompts — use sherpa's own tooling) |
+| **Offline ASR** (19 in API) | transducer, paraformer, whisper, sense-voice, moonshine, fire-red-asr, canary, telespeech, wenet-ctc, dolphin, zipformer-ctc, nemo-ctc, tdnn, omnilingual, medasr, fire-red-ctc, cohere, **qwen3-asr, funasr-nano** — all auto-detected; force any with the **`Model type`** port. CTC models can decode through an **HLG graph** (`ctc_graph`; a relative path names a file of the model folder, e.g. `ctc_graph=HLG.fst`). A **Status** output reports the recording's length and peak level, and why no text came out | whisper (whisper-tiny.en) | — |
 | **Online ASR** (5) | transducer, paraformer, zipformer2-ctc, nemo-ctc, t-one-ctc — all | transducer (streaming-zipformer) | — |
-| **TTS** (7) | vits, matcha, kokoro, kitten, zipvoice, pocket, supertonic — all | vits (piper-amy) | — |
+| **TTS** (7) | vits, matcha, kokoro, kitten, zipvoice, pocket, supertonic — all; text read through the model's lexicon(s), or phonemized by the plugin's espeak-ng phonemizer | vits (piper-amy, phonemized) | — |
 | **VAD** (2) | silero, ten-vad | silero | — |
 | **Text** (3) | offline-punct (ct-transformer), online-punct (cnn-bilstm), diacritization (catt) — `Type` | offline-punct | — |
 | **Audio labels** | tagging (zipformer, CED), language-ID (whisper) — `Type` | zipformer tagging | — |
-| **Denoiser** (2) | gtcrn, dpdfnet — `Mode` | gtcrn | — |
+| **Denoiser** (2) | gtcrn, dpdfnet — `Mode`; dpdfnet `Attenuation limit` (offline) | gtcrn, dpdfnet | — |
 | **Source sep** (2) | spleeter, uvr | spleeter | — |
-| **Speaker** | any embedding model (3d-speaker / wespeaker / nemo — one API) | 3d-speaker | — |
+| **Speaker** | any embedding model (3d-speaker / wespeaker / nemo — one API); `get <name>` outputs an enrolled embedding | 3d-speaker | — |
 | **KWS** | transducer KWS | gigaspeech KWS | — |
-| **Diarization** | pyannote segmentation + speaker embedding | pyannote + 3d-speaker | — |
+| **Diarization** | pyannote segmentation + speaker embedding; per-segment confidence, `Window shift` | pyannote + 3d-speaker | — |
 
 The **unified `sherpa_asr`** reaches every offline + online family above (`Mode`
 Auto/Streaming/Batch; Batch pairs a non-streaming model with a VAD via the 2nd port).
@@ -57,10 +59,17 @@ Auto/Streaming/Batch; Batch pairs a non-streaming model with a VAD via the 2nd p
 **`Model type` override values** (offline ASR / unified ASR, empty = auto-detect):
 `transducer, paraformer, whisper, sense_voice, moonshine, fire_red_asr, canary,
 cohere, telespeech, wenet_ctc, dolphin, zipformer_ctc, nemo_ctc, tdnn, omnilingual,
-medasr, fire_red_asr_ctc`.
+medasr, fire_red_asr_ctc, qwen3_asr, funasr_nano`.
 
-So: **code coverage is complete** (every 1.13.3 family reachable except the
-funasr-nano LLM pipeline); **CI coverage is one representative model per feature**.
+So: **code coverage is complete** (every family in the pinned C API is
+reachable); **CI coverage is one representative model per feature**.
+
+The LLM recognizers (qwen3-asr, funasr-nano, ~850 MB each) and HLG decoding
+(`SHERPA_TEST_ASR_HLG_MODEL`, ~380 MB) are too large for CI and were validated
+locally: qwen3-asr and HLG transcribe the test utterances. The funasr-nano int8
+export (2025-12-30) returns empty text for many of its own sample clips, and
+upstream's `c-api-examples/funasr-nano-c-api.c` does the same against both
+1.13.4 and the pinned snapshot, so that is the model, not this wiring.
 
 ## Options
 
@@ -83,10 +92,10 @@ Parsed on the worker thread, applied over the auto-built config. See
 
 | Object | Keys |
 |---|---|
-| ASR offline | `hotwords_file`, `hotwords_score`, `blank_penalty`, `max_active_paths`, `rule_fsts`, `rule_fars`, whisper `language` / `task` / `tail_paddings` |
+| ASR offline | `hotwords_file`, `hotwords_score`, `blank_penalty`, `max_active_paths`, `rule_fsts`, `rule_fars`, whisper `language` / `task` / `tail_paddings`; cohere `language` / `use_punct` / `use_itn`; qwen3-asr + funasr-nano `hotwords` / `max_new_tokens` / `temperature` / `top_p` / `seed`, qwen3 `max_total_len`, funasr `language` / `itn` / `system_prompt` / `user_prompt`; HLG `ctc_graph` / `ctc_max_active` (relative `ctc_graph`, `hotwords_file`, `rule_fsts` are looked up in the model folder) |
 | ASR online | `hotwords_file`, `hotwords_score`, `blank_penalty`, `max_active_paths`, `rule_fsts`, `rule_fars`, `rule1_min_trailing_silence`, `rule2_min_trailing_silence`, `rule3_min_utterance_length` |
 | VAD | `threshold`, `min_silence_duration`, `min_speech_duration`, `max_speech_duration`, `window_size` |
-| TTS | `noise_scale`, `noise_scale_w` (vits), `length_scale`, `rule_fsts`, `rule_fars`, `max_num_sentences` |
+| TTS | `noise_scale`, `noise_scale_w` (vits), `length_scale`, `rule_fsts`, `rule_fars`, `max_num_sentences`, `voice` (espeak-ng voice for phonemized models), kokoro `lang` |
 
 Example (TTS): `length_scale = 1.2 ; noise_scale = 0.5`
 

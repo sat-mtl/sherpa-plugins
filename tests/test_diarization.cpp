@@ -47,7 +47,7 @@ TEST_CASE("Diarization segments a passage with valid, ordered segments",
   int fired = 0;
   obj.outputs.on_segment.call.context = &fired;
   obj.outputs.on_segment.call.function
-      = +[](void* c, float, float, int) { (*static_cast<int*>(c))++; };
+      = +[](void* c, float, float, int, float) { (*static_cast<int*>(c))++; };
 
   obj.inputs.record.value = true;
   test::drive_audio(obj, audio, block);
@@ -61,6 +61,9 @@ TEST_CASE("Diarization segments a passage with valid, ordered segments",
   REQUIRE_FALSE(segs.empty());
   REQUIRE(obj.outputs.num_speakers_out.value >= 1);
   CHECK(fired == static_cast<int>(segs.size()));
+  // Confidence is requested: in [-1, 1], or -2 where it could not be computed.
+  for(const auto& seg : segs)
+    CHECK(((seg.confidence >= -1.f && seg.confidence <= 1.f) || seg.confidence == -2.f));
   CHECK(obj.outputs.progress.value == 1.f);
 
   // Diarization invariants: each segment is a valid, in-bounds interval with a
@@ -71,12 +74,12 @@ TEST_CASE("Diarization segments a passage with valid, ordered segments",
   float prev_start = -1.f;
   for(const auto& s : segs)
   {
-    CHECK(s.start >= 0.f);
-    CHECK(s.end >= s.start);
-    CHECK(s.end <= duration + tol);
+    CHECK(s.t_start >= 0.f);
+    CHECK(s.t_end >= s.t_start);
+    CHECK(s.t_end <= duration + tol);
     CHECK(s.speaker >= 0);
-    CHECK(s.start >= prev_start - 1e-4f); // non-decreasing start
-    prev_start = s.start;
+    CHECK(s.t_start >= prev_start - 1e-4f); // non-decreasing start
+    prev_start = s.t_start;
   }
 }
 

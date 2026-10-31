@@ -6,8 +6,9 @@
 // diarization model's rate, and processed in one shot by a sherpa-onnx offline
 // speaker-diarization pipeline (a pyannote segmentation model + a speaker
 // embedding extractor + fast clustering). The result is a list of
-// {start, end, speaker} segments, emitted as a value port and one callback per
-// segment.
+// {start, end, speaker, confidence} segments, emitted as a value port and one
+// callback per segment. confidence is in [-1, 1] (higher is surer), or -2 when
+// it could not be computed for that segment.
 //
 // All inference and model loading happen on the worker; operator() (audio thread)
 // only downmixes + accumulates and dispatches -- Process is slow and must stay off
@@ -24,6 +25,7 @@
 #include <halp/file_port.hpp>
 #include <halp/meta.hpp>
 
+#include <array>
 #include <atomic>
 #include <cstdint>
 #include <cstring>
@@ -31,6 +33,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace sherpa
@@ -41,7 +44,7 @@ namespace sherpa
 // pipeline. Runs on the worker thread (filesystem + allocation) -- never on audio.
 inline OfflineSpeakerDiarizationHandle create_diarization(
     std::string_view dir, int num_clusters, float threshold, int num_threads,
-    const char* provider = "cpu")
+    const char* provider = "cpu", float window_shift = 0.f)
 {
   const auto& L = SherpaLoader::instance();
   if(!L.SherpaOnnxCreateOfflineSpeakerDiarization)
@@ -93,6 +96,9 @@ inline OfflineSpeakerDiarizationHandle create_diarization(
   SherpaOnnxOfflineSpeakerDiarizationConfig cfg;
   std::memset(&cfg, 0, sizeof(cfg));
   cfg.segmentation.pyannote.model = seg.c_str();
+  // Sliding-window shift as a fraction of the model window: smaller is finer
+  // and slower. <= 0 keeps sherpa's default (0.1).
+  cfg.segmentation.pyannote.window_shift_ratio = window_shift;
   cfg.segmentation.num_threads = num_threads;
   cfg.segmentation.provider = provider;
   cfg.embedding.model = emb.c_str();
@@ -100,6 +106,7 @@ inline OfflineSpeakerDiarizationHandle create_diarization(
   cfg.embedding.provider = provider;
   cfg.clustering.num_clusters = num_clusters; // <=0 => auto via threshold
   cfg.clustering.threshold = threshold;
+  cfg.clustering.compute_confidence = 1;
   cfg.min_duration_on = 0.3f;
   cfg.min_duration_off = 0.5f;
 
@@ -117,12 +124,19 @@ public:
   halp_meta(description, "Offline speaker diarization with sherpa-onnx (who spoke when)")
   halp_meta(uuid, "f7e40b28-70ac-4431-abf1-69dde53665dd")
 
+  // Members named `start` / `end` would make a vector of these an avendish
+  // curve (curve_segment_float), which a value outlet never sends: name them
+  // otherwise, and keep "start" / "end" as the keys the outlet shows.
   struct Segment
   {
-    float start;
-    float end;
+    float t_start;
+    float t_end;
     int speaker;
-    halp_field_names(start, end, speaker);
+    float confidence;
+    static constexpr auto field_names()
+    {
+      return std::array<std::string_view, 4>{"start", "end", "speaker", "confidence"};
+    }
   };
 
   struct
@@ -134,13 +148,15 @@ public:
     halp::knob_f32<"Cluster threshold", halp::range{0., 1., 0.5}> cluster_threshold;
     halp::enum_t<Provider, "Provider"> provider;
     halp::hslider_i32<"Threads", halp::range{1., 8., 1.}> threads;
+    halp::knob_f32<"Window shift", halp::range{0., 1., 0.1}> window_shift;
   } inputs;
 
   struct
   {
     halp::val_port<"Segments", std::vector<Segment>> segments;
     halp::val_port<"Num speakers", int> num_speakers_out;
-    halp::callback<"Segment", float, float, int> on_segment; // start, end, speaker
+    // start, end, speaker, confidence
+    halp::callback<"Segment", float, float, int, float> on_segment;
     halp::val_port<"Progress", float> progress;
   } outputs;
 
@@ -151,6 +167,7 @@ public:
     int num_threads = 1;
     int num_clusters = -1;
     float threshold = 0.5f;
+    float window_shift = 0.1f;
     bool reload = false;
     Provider provider = Provider::CPU;
     std::string want_model;
@@ -179,6 +196,7 @@ private:
   std::atomic<bool> m_inflight{false};
   MonoAccum m_accum;
   std::string m_requested_model, m_loaded_model;
+  float m_requested_shift = 0.1f;
   bool m_reload = false;
   bool m_was_recording = false;
 
@@ -210,7 +228,7 @@ inline void Diarization::emit_pending()
     return;
   outputs.num_speakers_out.value = m_emit_num_speakers;
   for(const auto& s : m_emit_segments)
-    outputs.on_segment(s.start, s.end, s.speaker);
+    outputs.on_segment(s.t_start, s.t_end, s.speaker, s.confidence);
   outputs.progress.value = 1.f;
   // Move last: this empties m_emit_segments after the on_segment loop above.
   outputs.segments.value = std::move(m_emit_segments);
@@ -225,6 +243,12 @@ inline void Diarization::operator()(int frames)
   if(inputs.model.value != m_requested_model)
   {
     m_requested_model = inputs.model.value;
+    m_reload = true;
+  }
+  // The window shift is part of the pipeline's construction.
+  if(inputs.window_shift.value != m_requested_shift)
+  {
+    m_requested_shift = inputs.window_shift.value;
     m_reload = true;
   }
 
@@ -253,6 +277,7 @@ inline void Diarization::dispatch()
   job.num_threads = inputs.threads.value;
   job.num_clusters = inputs.num_speakers.value;
   job.threshold = inputs.cluster_threshold.value;
+  job.window_shift = m_requested_shift;
   job.provider = inputs.provider.value;
   job.want_model = m_requested_model;
   job.reload = m_reload;
@@ -273,7 +298,7 @@ Diarization::worker::work(std::shared_ptr<Job> job)
   {
     job->sd = std::make_shared<OfflineSpeakerDiarizationHandle>(create_diarization(
         job->want_model, job->num_clusters, job->threshold, job->num_threads,
-        provider_str(job->provider)));
+        provider_str(job->provider), job->window_shift));
   }
 
   job->segments.clear();
@@ -341,8 +366,8 @@ Diarization::worker::work(std::shared_ptr<Job> job)
           {
             job->segments.reserve(static_cast<std::size_t>(num_seg));
             for(int i = 0; i < num_seg; ++i)
-              job->segments.push_back(
-                  Segment{segs[i].start, segs[i].end, segs[i].speaker});
+              job->segments.push_back(Segment{
+                  segs[i].start, segs[i].end, segs[i].speaker, segs[i].confidence});
             if(L.SherpaOnnxOfflineSpeakerDiarizationDestroySegment)
               L.SherpaOnnxOfflineSpeakerDiarizationDestroySegment(segs);
           }

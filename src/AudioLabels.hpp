@@ -268,6 +268,10 @@ AudioLabels::worker::work(std::shared_ptr<Job> job)
       std::string mdl = model::find_in_dir(d, {"model"}, ".onnx");
       if(mdl.empty())
         mdl = model::find_in_dir(d, {}, ".onnx");
+      // The released CED packages name the file model(.int8).onnx: only the
+      // directory says it is CED, and a CED model loaded as zipformer throws.
+      if(ced.empty() && model::icontains(model::dir_name(d), "ced"))
+        ced = mdl;
       std::string labels
           = model::find_in_dir(d, {"class_labels", "labels", "class"}, ".csv");
       if(labels.empty())

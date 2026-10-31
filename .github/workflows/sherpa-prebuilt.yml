@@ -1,8 +1,13 @@
 name: sherpa-onnx prebuilt C API
 
 # Builds the prebuilt, dlopen'able sherpa-onnx C-API shared library
-# (libsherpa-onnx-c-api + libonnxruntime) for every desktop platform and publishes
-# the archives this addon consumes (cmake/sherpa-onnx.cmake, SHERPA_ONNX_FETCH_LIBS).
+# (libsherpa-onnx-c-api + libonnxruntime) for every desktop platform, together with
+# this repo's phonemizer (libsherpa-plugins-phonemizer: piper-phonemize + espeak-ng,
+# which sherpa-onnx no longer bundles), and publishes the archives this addon
+# consumes (cmake/sherpa-onnx.cmake, SHERPA_ONNX_FETCH_LIBS).
+#
+# The sherpa version is a release ("1.13.8" -> tag v1.13.8) or an unreleased
+# snapshot "<last release>-<commit>" ("1.13.8-a63f821" -> that commit).
 #
 # Run manually (workflow_dispatch) to produce downloadable artifacts, or push a tag
 # `prebuilt-v<sherpa>-ort<onnxruntime>` to additionally create/attach a GitHub
@@ -25,8 +30,8 @@ on:
   workflow_dispatch:
     inputs:
       sherpa_version:
-        description: "sherpa-onnx version to build (without leading v)"
-        default: "1.13.4"
+        description: "sherpa-onnx version to build (without leading v; <release>-<commit> for a snapshot)"
+        default: "1.13.8-a63f821"
       ort_version:
         description: "onnxruntime version to link against (must match ossia score)"
         default: "1.27.1"
@@ -38,10 +43,10 @@ permissions:
 
 env:
   # Default versions; overridden by the workflow_dispatch inputs or the tag name.
-  SHERPA_VERSION: "1.13.4"
+  SHERPA_VERSION: "1.13.8-a63f821"
   ORT_VERSION: "1.27.1"
   # Bound the compile parallelism: GitHub runners have little RAM (7-16 GB) and
-  # sherpa's heavy C++ TUs (kaldi / openfst / espeak / piper) OOM with an
+  # sherpa's heavy C++ TUs (kaldi / openfst) OOM with an
   # unbounded `-j`. Keep this small.
   BUILD_JOBS: "2"
 
@@ -126,11 +131,24 @@ jobs:
           ls -la "${root}/lib"
 
       - name: Checkout sherpa-onnx
+        shell: bash
+        run: |
+          # actions/checkout cannot take an abbreviated commit, so clone (blobless:
+          # history without file contents) and check out whichever ref VER names.
+          if [[ "$VER" =~ -([0-9a-f]{7,40})$ ]]; then
+            ref="${BASH_REMATCH[1]}"
+          else
+            ref="v${VER}"
+          fi
+          echo "sherpa-onnx ref: $ref"
+          git clone --quiet --filter=blob:none https://github.com/k2-fsa/sherpa-onnx sherpa-onnx
+          git -C sherpa-onnx checkout --quiet "$ref"
+          git -C sherpa-onnx log -1 --format='%H %s'
+
+      - name: Checkout sherpa-plugins (for phonemizer/)
         uses: actions/checkout@v4
         with:
-          repository: k2-fsa/sherpa-onnx
-          ref: v${{ env.VER }}
-          path: sherpa-onnx
+          path: sherpa-plugins
 
       - name: Configure
         shell: bash
@@ -165,6 +183,32 @@ jobs:
         working-directory: sherpa-onnx
         run: cmake --build build --config Release --target install --parallel "${BUILD_JOBS}"
 
+      # Same toolchain and target arch as sherpa above; lands in the same dist/.
+      - name: Build & install the phonemizer
+        shell: bash
+        run: |
+          args=(
+            -DCMAKE_BUILD_TYPE=Release
+            "-DCMAKE_INSTALL_PREFIX=${GITHUB_WORKSPACE}/dist"
+          )
+          if [[ -n "${{ matrix.osx_arch }}" ]]; then
+            args+=("-DCMAKE_OSX_ARCHITECTURES=${{ matrix.osx_arch }}")
+          fi
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            cmake -S sherpa-plugins/phonemizer -B build-phonemizer -A x64 "${args[@]}"
+          else
+            cmake -S sherpa-plugins/phonemizer -B build-phonemizer "${args[@]}"
+          fi
+          cmake --build build-phonemizer --config Release --target install --parallel "${BUILD_JOBS}"
+
+      - name: Verify the phonemizer exports only its C API
+        if: runner.os == 'Linux'
+        shell: bash
+        working-directory: dist/lib
+        run: |
+          nm -D --defined-only libsherpa-plugins-phonemizer.so | grep ' T '
+          ! nm -D --defined-only libsherpa-plugins-phonemizer.so | grep ' T ' | grep -v ' SherpaPlugins'
+
       - name: Verify the onnxruntime dependency
         if: runner.os != 'Windows'
         shell: bash
@@ -189,7 +233,7 @@ jobs:
         shell: bash
         working-directory: dist
         run: |
-          # espeak-ng's .pc leaks the runner's absolute paths and nothing consumes it.
+          # sherpa's .pc files leak the runner's absolute paths; nothing consumes them.
           rm -rf lib/pkgconfig
           if [[ "${{ runner.os }}" == "Linux" ]]; then
             # One real file under the SONAME: standalone packages bundle this, and

@@ -1,3 +1,4 @@
 -std=c++23
 -Isrc
 -I3rdparty/sherpa-onnx/include
+-Iphonemizer/include

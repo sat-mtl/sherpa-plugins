@@ -6,10 +6,11 @@
 // configured keyword is detected. sherpa resamples the input internally, so the
 // host rate is passed through as-is.
 //
-// Keywords come from either the "Keywords" line-edit (inline, tokenized, one per
-// line -> SherpaOnnxCreateKeywordStreamWithKeywords) or, when that is empty, the
-// "Keywords file" port (a path baked into the spotter config -> plain
-// SherpaOnnxCreateKeywordStream).
+// Keywords come from either the "Keywords" line-edit (inline, model tokens,
+// separated by "/") or, when that is empty, the "Keywords file" port (one per
+// line). Either way they are checked against the model's tokens.txt and handed
+// to the spotter config as a buffer: sherpa exits the process on a keyword
+// it cannot encode, so lines with unknown tokens are dropped with a message.
 //
 // The spotter/stream are stateful and live across calls; only one decode is in
 // flight at a time (a new block's audio accumulates until the previous decode
@@ -29,24 +30,92 @@
 #include <halp/file_port.hpp>
 #include <halp/meta.hpp>
 
+#include <algorithm>
 #include <atomic>
+#include <cstdio>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <functional>
 #include <memory>
+#include <sstream>
 #include <string>
 #include <string_view>
+#include <unordered_set>
 #include <vector>
 
 namespace sherpa
 {
+
+inline std::string read_text_file(const std::string& path)
+{
+  std::ifstream f{path};
+  return {std::istreambuf_iterator<char>{f}, std::istreambuf_iterator<char>{}};
+}
+
+// Inline keywords are separated by "/", the buffer wants one per line
+inline std::string slash_to_lines(std::string_view keywords)
+{
+  std::string s{keywords};
+  std::replace(s.begin(), s.end(), '/', '\n');
+  return s;
+}
+
+// Keep the keyword lines whose tokens all exist in tokens.txt. A line is
+// "tok tok tok [:boost] [#threshold] [@display_name]"; the name is one word.
+inline std::string valid_keywords(const std::string& lines, const std::string& tokens_txt)
+{
+  std::unordered_set<std::string> vocab;
+  {
+    std::ifstream f{tokens_txt};
+    std::string line;
+    while(std::getline(f, line))
+    {
+      std::istringstream ls{line};
+      std::string tok;
+      if(ls >> tok)
+        vocab.insert(tok);
+    }
+  }
+
+  std::string out;
+  std::istringstream in{lines};
+  std::string line;
+  while(std::getline(in, line))
+  {
+    std::istringstream ls{line};
+    std::string word;
+    bool any = false, ok = true;
+    while(ls >> word)
+    {
+      if(word[0] == ':' || word[0] == '#' || word[0] == '@')
+        continue;
+      any = true;
+      if(!vocab.contains(word))
+      {
+        std::fprintf(
+            stderr,
+            "sherpa-plugins: keyword spotter: \"%s\" is not a token of this model, "
+            "ignoring \"%s\" (keywords are written as model tokens, and a display "
+            "name after @ is one word)\n",
+            word.c_str(), line.c_str());
+        ok = false;
+        break;
+      }
+    }
+    if(any && ok)
+      out += line + '\n';
+  }
+  return out;
+}
 
 // Build a keyword spotter from a model directory. KWS models are streaming
 // transducers (encoder/decoder/joiner + tokens); anything else yields an empty
 // (invalid) handle. Runs on the worker thread. Null-checks the extended symbol.
 inline KeywordSpotterHandle create_keyword_spotter(
     std::string_view dir, int num_threads, float threshold,
-    std::string_view keywords_file, const char* provider = "cpu")
+    std::string_view keywords_file, const char* provider = "cpu",
+    std::string_view keywords = {})
 {
   const auto& L = SherpaLoader::instance();
   if(!L.SherpaOnnxCreateKeywordSpotter)
@@ -80,8 +149,15 @@ inline KeywordSpotterHandle create_keyword_spotter(
   cfg.num_trailing_blanks = 1;
   cfg.keywords_score = 1.0f;
   cfg.keywords_threshold = threshold;
-  if(!kwfile.empty())
-    cfg.keywords_file = kwfile.c_str();
+  // The keywords always reach sherpa through the buffer, checked first: sherpa
+  // exits the whole process on a keyword with a token the model lacks, which a
+  // typo in the Keywords field would otherwise do.
+  std::string kwbuf = valid_keywords(
+      keywords.empty() ? read_text_file(kwfile) : slash_to_lines(keywords), tokens);
+  if(kwbuf.empty())
+    return {};
+  cfg.keywords_buf = kwbuf.c_str();
+  cfg.keywords_buf_size = static_cast<int32_t>(kwbuf.size());
 
   return KeywordSpotterHandle{L.SherpaOnnxCreateKeywordSpotter(&cfg)};
 }
@@ -271,18 +347,15 @@ KeywordSpotter::worker::work(std::shared_ptr<Job> job)
   {
     job->spotter = std::make_shared<KeywordSpotterHandle>(create_keyword_spotter(
         job->want_model, job->num_threads, job->threshold,
-        job->want_keywords_file, provider_str(job->provider)));
+        job->want_keywords_file, provider_str(job->provider), job->want_keywords));
     job->stream.reset();
   }
   if(have_kws && job->spotter && *job->spotter && (!job->stream || !*job->stream))
   {
     auto* kws = job->spotter->get();
-    const SherpaOnnxOnlineStream* st = nullptr;
-    if(!job->want_keywords.empty())
-      st = L.SherpaOnnxCreateKeywordStreamWithKeywords(kws, job->want_keywords.c_str());
-    else
-      st = L.SherpaOnnxCreateKeywordStream(kws);
-    job->stream = std::make_shared<OnlineStreamHandle>(st);
+    // The spotter holds the checked keywords (see create_keyword_spotter)
+    job->stream
+        = std::make_shared<OnlineStreamHandle>(L.SherpaOnnxCreateKeywordStream(kws));
   }
 
   job->keyword.clear();

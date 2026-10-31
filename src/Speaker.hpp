@@ -121,6 +121,7 @@ public:
   //  enroll <name> : store the last embedding under <name>
   //  remove <name> : drop <name> from the manager
   //  clear         : forget all enrolled speakers
+  //  get <name>    : output <name>'s enrolled embedding on "Embedding"
   struct messages
   {
     struct
@@ -140,6 +141,12 @@ public:
       halp_meta(name, "clear")
       void operator()(Speaker& self) { self.clear(); }
     } clear;
+
+    struct
+    {
+      halp_meta(name, "get")
+      void operator()(Speaker& self, std::string name) { self.get(name); }
+    } get;
   };
 
   struct Job
@@ -170,6 +177,7 @@ public:
   void enroll(const std::string& name);
   void remove(const std::string& name);
   void clear();
+  void get(const std::string& name);
 
 private:
   void dispatch();
@@ -467,6 +475,23 @@ inline void Speaker::clear()
   m_manager.reset();
   m_emit_count = 0;
   m_emit_have_count = true;
+}
+
+inline void Speaker::get(const std::string& name)
+{
+  const auto& L = SherpaLoader::instance();
+  if(!m_manager || !*m_manager || name.empty() || m_last_dim <= 0
+     || !L.SherpaOnnxSpeakerEmbeddingManagerGetEmbedding
+     || !L.SherpaOnnxSpeakerEmbeddingManagerDestroyEmbedding)
+    return;
+  // NULL when nobody is enrolled under that name.
+  const float* v
+      = L.SherpaOnnxSpeakerEmbeddingManagerGetEmbedding(m_manager->get(), name.c_str());
+  if(!v)
+    return;
+  m_emit_embedding.assign(v, v + m_last_dim);
+  m_emit_have_embedding = true;
+  L.SherpaOnnxSpeakerEmbeddingManagerDestroyEmbedding(v);
 }
 
 }

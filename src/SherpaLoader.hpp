@@ -53,6 +53,7 @@ struct SherpaLoader
 {
   // ---- version / wave / resampler utilities ----
   SHERPA_FN(SherpaOnnxGetVersionStr);
+  SHERPA_FN(SherpaOnnxGetOnnxruntimeVersionStr);
   SHERPA_FN(SherpaOnnxReadWave);
   SHERPA_FN(SherpaOnnxFreeWave);
   SHERPA_FN(SherpaOnnxCreateLinearResampler);
@@ -104,6 +105,8 @@ struct SherpaLoader
   SHERPA_FN(SherpaOnnxOfflineTtsNumSpeakers);
   SHERPA_FN(SherpaOnnxOfflineTtsGenerateWithConfig);
   SHERPA_FN(SherpaOnnxDestroyOfflineTtsGeneratedAudio);
+  SHERPA_FN(SherpaOnnxOfflineTtsLang);
+  SHERPA_FN(SherpaOnnxDestroyOfflineTtsLang);
 
   // ---- keyword spotting (reuses the online stream) ----
   SHERPA_FN(SherpaOnnxCreateKeywordSpotter);
@@ -138,6 +141,8 @@ struct SherpaLoader
   SHERPA_FN(SherpaOnnxSpeakerEmbeddingManagerNumSpeakers);
   SHERPA_FN(SherpaOnnxSpeakerEmbeddingManagerGetAllSpeakers);
   SHERPA_FN(SherpaOnnxSpeakerEmbeddingManagerFreeAllSpeakers);
+  SHERPA_FN(SherpaOnnxSpeakerEmbeddingManagerGetEmbedding);
+  SHERPA_FN(SherpaOnnxSpeakerEmbeddingManagerDestroyEmbedding);
 
   // ---- offline speaker diarization ----
   SHERPA_FN(SherpaOnnxCreateOfflineSpeakerDiarization);
@@ -260,6 +265,34 @@ private:
     }
 
     load();
+    if(available)
+      check_onnxruntime();
+  }
+
+  // sherpa reports the onnxruntime it actually bound to. It should be the very
+  // image OnnxRuntimeLoader mapped (the host's); a different version means a
+  // second onnxruntime got loaded beside it, and one differing from the version
+  // sherpa was built against is the likely reason for crashes inside sherpa.
+  void check_onnxruntime() const
+  {
+    if(!SherpaOnnxGetOnnxruntimeVersionStr)
+      return;
+    const char* bound = SherpaOnnxGetOnnxruntimeVersionStr();
+    if(!bound)
+      return;
+    const auto& ort = OnnxRuntimeLoader::instance();
+    if(!ort.version.empty() && ort.version != bound)
+      std::fprintf(
+          stderr,
+          "sherpa-plugins: sherpa-onnx bound to onnxruntime %s, not to the %s "
+          "already loaded from %s: two onnxruntimes are in the process\n",
+          bound, ort.version.c_str(), ort.resolved_path.c_str());
+    else if(std::string_view{bound} != SHERPA_PLUGINS_ORT_VERSION)
+      std::fprintf(
+          stderr,
+          "sherpa-plugins: sherpa-onnx was built against onnxruntime %s but runs "
+          "on %s\n",
+          SHERPA_PLUGINS_ORT_VERSION, bound);
   }
 
   void load()
@@ -313,6 +346,11 @@ private:
     SHERPA_REQ(SherpaOnnxOfflineTtsGenerateWithConfig);
     SHERPA_REQ(SherpaOnnxDestroyOfflineTtsGeneratedAudio);
 
+    // Newer additions: optional, so an older runtime library keeps working.
+    SHERPA_OPT(SherpaOnnxGetOnnxruntimeVersionStr);
+    SHERPA_OPT(SherpaOnnxOfflineTtsLang);
+    SHERPA_OPT(SherpaOnnxDestroyOfflineTtsLang);
+
     // ---- extended features (optional; missing => that feature reports invalid) ----
     SHERPA_OPT(SherpaOnnxCreateKeywordSpotter);
     SHERPA_OPT(SherpaOnnxDestroyKeywordSpotter);
@@ -345,6 +383,8 @@ private:
     SHERPA_OPT(SherpaOnnxSpeakerEmbeddingManagerNumSpeakers);
     SHERPA_OPT(SherpaOnnxSpeakerEmbeddingManagerGetAllSpeakers);
     SHERPA_OPT(SherpaOnnxSpeakerEmbeddingManagerFreeAllSpeakers);
+    SHERPA_OPT(SherpaOnnxSpeakerEmbeddingManagerGetEmbedding);
+    SHERPA_OPT(SherpaOnnxSpeakerEmbeddingManagerDestroyEmbedding);
 
     SHERPA_OPT(SherpaOnnxCreateOfflineSpeakerDiarization);
     SHERPA_OPT(SherpaOnnxDestroyOfflineSpeakerDiarization);
