@@ -8,7 +8,7 @@
 //   * Online (streaming): the natural realtime default. The stateful online
 //     denoiser is fed small chunks continuously and emits enhanced audio with a
 //     short internal latency (Run may return NULL until it has buffered enough).
-//   * Offline (batch): each accumulated chunk is denoised independently by the
+//   * Offline (batch): each ~1 s chunk is denoised independently by the
 //     stateless offline Run.
 //   * Auto: prefer the streaming path (create the online denoiser); fall back to
 //     the offline denoiser if the model cannot be loaded online.
@@ -68,6 +68,9 @@ public:
     halp::enum_t<Mode, "Mode"> mode;
     halp::enum_t<Provider, "Provider"> provider;
     halp::hslider_i32<"Threads", halp::range{1., 8., 1.}> threads;
+    // DPDFNet, offline mode only: cap the suppression at this many dB by mixing
+    // some of the noisy signal back in. 0 = no limit.
+    halp::knob_f32<"Attenuation limit", halp::range{0., 100., 0.}> attenuation_limit;
   } inputs;
 
   struct
@@ -87,6 +90,7 @@ public:
     bool reload = false;
     Provider provider = Provider::CPU;
     Mode mode = Mode::Auto;
+    float attenuation_limit = 0.f;
     std::string want_model;
     std::shared_ptr<OnlineDenoiserHandle> online;
     std::shared_ptr<OfflineDenoiserHandle> offline;
@@ -106,6 +110,8 @@ public:
 private:
   void dispatch();
 
+  static constexpr double offline_chunk_seconds = 1.0;
+
   bool m_available = SherpaLoader::instance().available;
   double m_host_rate = 48000.;
   int m_model_rate = 16000;
@@ -121,6 +127,7 @@ private:
   std::size_t m_play_pos = 0;
   std::string m_requested_model, m_loaded_model;
   Mode m_requested_mode = Mode::Auto, m_loaded_mode = Mode::Auto;
+  float m_requested_limit = 0.f;
   bool m_reload = false;
 };
 
@@ -155,10 +162,22 @@ inline void Denoiser::operator()(int frames)
       m_requested_mode = inputs.mode.value;
       m_reload = true;
     }
+    if(inputs.attenuation_limit.value != m_requested_limit)
+    {
+      m_requested_limit = inputs.attenuation_limit.value;
+      m_reload = true;
+    }
 
     m_accum.push(inputs.audio, inputs.audio.channels, frames);
 
-    if(!m_inflight.load(std::memory_order_acquire) && (!m_accum.empty() || m_reload))
+    // The streaming denoiser takes any amount. The offline one is stateless and
+    // denoises each dispatch on its own, so feed it chunks long enough to hold
+    // whole STFT frames (dpdfnet returns nothing for a few hundred samples) and
+    // to keep the seams between independently processed chunks rare.
+    const std::size_t min_chunk
+        = m_use_online ? 1 : static_cast<std::size_t>(m_host_rate * offline_chunk_seconds);
+    if(!m_inflight.load(std::memory_order_acquire)
+       && (m_accum.size() >= min_chunk || m_reload))
       dispatch();
   }
 
@@ -181,6 +200,7 @@ inline void Denoiser::dispatch()
   job.provider = inputs.provider.value;
   job.want_model = m_requested_model;
   job.mode = m_requested_mode;
+  job.attenuation_limit = m_requested_limit;
   job.reload = m_reload;
   job.model_rate = m_model_rate;
   job.use_online = m_use_online;
@@ -260,7 +280,10 @@ inline std::function<void(Denoiser&)> Denoiser::worker::work(std::shared_ptr<Job
       mc.debug = 0;
       mc.provider = provider_str(job->provider);
       if(is_dpdf)
+      {
         mc.dpdfnet.model = model_file.c_str();
+        mc.dpdfnet.attenuation_limit_db = job->attenuation_limit;
+      }
       else
         mc.gtcrn.model = model_file.c_str();
 

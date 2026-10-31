@@ -19,7 +19,10 @@
 #include <halp/file_port.hpp>
 #include <halp/meta.hpp>
 
+#include <algorithm>
 #include <atomic>
+#include <cmath>
+#include <cstdio>
 #include <functional>
 #include <memory>
 #include <string>
@@ -60,6 +63,9 @@ public:
     halp::callback<"Emotion", std::string_view> emotion;
     halp::callback<"Event", std::string_view> event;
     halp::callback<"Done"> done;
+    // What happened to the last recording: how long, how loud, what came out,
+    // or why nothing did. Last output, so it moves no existing port.
+    halp::val_port<"Status", std::string> status;
   } outputs;
 
   struct Job
@@ -78,6 +84,7 @@ public:
     std::vector<std::string> tokens;
     std::vector<float> timestamps;
     std::string lang, emotion, event;
+    std::string status;
   };
 
   struct worker
@@ -104,7 +111,7 @@ private:
 
   // Outputs must be emitted from operator() (the run() cycle), not from the async
   // worker closure -- value outlets written outside run() do not propagate.
-  std::string m_emit_text, m_emit_lang, m_emit_emotion, m_emit_event;
+  std::string m_emit_text, m_emit_lang, m_emit_emotion, m_emit_event, m_emit_status;
   std::vector<std::string> m_emit_tokens;
   std::vector<float> m_emit_timestamps;
   bool m_emit_ready = false;
@@ -122,7 +129,10 @@ inline void OfflineRecognizer::prepare(halp::setup info)
     m_job = std::make_shared<Job>();
     m_job->samples.reserve(static_cast<std::size_t>(m_host_rate * 120.0));
     m_job->want_model.reserve(512);
+    m_job->status.reserve(512);
   }
+  outputs.status.value.reserve(512);
+  m_emit_status.reserve(512);
 }
 
 inline void OfflineRecognizer::emit_pending()
@@ -138,6 +148,7 @@ inline void OfflineRecognizer::emit_pending()
     outputs.emotion(std::string_view{m_emit_emotion});
   if(!m_emit_event.empty())
     outputs.event(std::string_view{m_emit_event});
+  outputs.status.value.swap(m_emit_status); // both keep their capacity
   outputs.done();
   m_emit_ready = false;
 }
@@ -170,7 +181,11 @@ inline void OfflineRecognizer::dispatch()
   if(m_inflight.load(std::memory_order_acquire) || !m_job)
     return;
   if(m_accum.empty() && !m_reload)
+  {
+    outputs.status.value.assign(
+        "Nothing was recorded: no audio reached In while Record was on");
     return;
+  }
 
   auto& job = *m_job;
   m_accum.drain_into(job.samples);
@@ -209,6 +224,21 @@ OfflineRecognizer::worker::work(std::shared_ptr<Job> job)
   job->lang.clear();
   job->emotion.clear();
   job->event.clear();
+
+  float peak = 0.f;
+  for(float x : job->samples)
+    peak = std::max(peak, std::abs(x));
+  const double seconds = job->rate > 0 ? job->samples.size() / job->rate : 0.;
+  const double peak_db = peak > 0.f ? 20. * std::log10(peak) : -120.;
+  char head[160];
+  std::snprintf(
+      head, sizeof(head), "%.1f s recorded, peak %.0f dBFS", seconds, peak_db);
+
+  if(!job->rec || !*job->rec)
+    job->status = "The model could not be loaded from \"" + job->want_model
+                  + "\" (see the console for sherpa-onnx's message)";
+  else if(job->samples.empty())
+    job->status = "Nothing was recorded";
   if(job->rec && *job->rec && !job->samples.empty())
   {
     OfflineStreamHandle stream{
@@ -239,6 +269,13 @@ OfflineRecognizer::worker::work(std::shared_ptr<Job> job)
         L.SherpaOnnxDestroyOfflineRecognizerResult(r);
       }
     }
+    job->status = head;
+    if(peak < 0.003f) // about -50 dBFS
+      job->status += ": too quiet, check the input level and channel";
+    else if(job->text.empty())
+      job->status += ": the model recognized no words";
+    else
+      job->status += ": ok";
   }
 
   return [job](OfflineRecognizer& self) {
@@ -251,6 +288,7 @@ OfflineRecognizer::worker::work(std::shared_ptr<Job> job)
     self.m_emit_lang = std::move(job->lang);
     self.m_emit_emotion = std::move(job->emotion);
     self.m_emit_event = std::move(job->event);
+    self.m_emit_status = std::move(job->status);
     self.m_emit_ready = true;
     self.m_inflight.store(false, std::memory_order_release);
   };

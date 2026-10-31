@@ -79,3 +79,63 @@ TEST_CASE("Denoiser reduces added noise while keeping speech", "[denoiser][workf
   REQUIRE(test::abs_energy(out) > 0.0); // speech preserved, not silenced
   CHECK(out_rms < in_rms);              // the added noise was attenuated
 }
+
+// DPDFNet's offline attenuation limit caps how much it may suppress, by mixing
+// the noisy input back in: with a 6 dB cap, more of the noise has to survive
+// than with no cap.
+//
+// Requires:
+//   SHERPA_TEST_DPDFNET_MODEL = a dpdfnet .onnx (or a dir holding one)
+//   SHERPA_TEST_WAV           = a speech wav
+TEST_CASE("DPDFNet attenuation limit lets more noise through", "[denoiser][workflow]")
+{
+  if(!test::loader_ready())
+    SHERPA_SKIP("sherpa-onnx runtime library not available");
+  auto model = test::env("SHERPA_TEST_DPDFNET_MODEL");
+  auto wav = test::env("SHERPA_TEST_WAV");
+  if(!model || !wav)
+    SHERPA_SKIP("set SHERPA_TEST_DPDFNET_MODEL and SHERPA_TEST_WAV");
+
+  int sr = 0;
+  auto noisy = test::load_wav_mono(*wav, sr);
+  REQUIRE(sr > 0);
+  test::add_white_noise(noisy, 0.15f);
+
+  auto denoise = [&](float limit_db) {
+    Denoiser obj;
+    test::wire_sync_worker(obj);
+    const int block = 512;
+    obj.prepare(halp::setup{
+        .input_channels = 1, .output_channels = 1, .frames = block,
+        .rate = (double)sr});
+    obj.inputs.model.value = *model;
+    obj.inputs.mode.value = Denoiser::Mode::Offline; // the limit is offline-only
+    obj.inputs.attenuation_limit.value = limit_db;
+    obj.inputs.threads.value = 1;
+
+    std::vector<float> out, outbuf(static_cast<std::size_t>(block), 0.f);
+    auto pump = [&](const float* in, int n) {
+      float* ich[1]{const_cast<float*>(in)};
+      obj.inputs.audio.samples = ich;
+      obj.inputs.audio.channels = 1;
+      std::fill(outbuf.begin(), outbuf.end(), 0.f);
+      float* och[1]{outbuf.data()};
+      obj.outputs.audio.samples = och;
+      obj(n);
+      out.insert(out.end(), outbuf.begin(), outbuf.begin() + n);
+    };
+    for(std::size_t i = 0; i < noisy.size(); i += static_cast<std::size_t>(block))
+      pump(noisy.data() + i,
+           static_cast<int>(std::min<std::size_t>(block, noisy.size() - i)));
+    std::vector<float> silence(static_cast<std::size_t>(block), 0.f);
+    for(int k = 0; k < 64; ++k)
+      pump(silence.data(), block);
+    return test::rms(out);
+  };
+
+  const double unlimited = denoise(0.f);
+  const double limited = denoise(6.f);
+  INFO("rms without limit: " << unlimited << ", with a 6 dB limit: " << limited);
+  REQUIRE(unlimited > 0.0);
+  CHECK(limited > unlimited);
+}

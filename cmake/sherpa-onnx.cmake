@@ -40,7 +40,12 @@
 
 set(SHERPA_ONNX_DIR "" CACHE PATH
     "Prebuilt sherpa-onnx install (with lib/). For running/packaging, not compiling.")
-set(SHERPA_ONNX_VERSION "1.13.4" CACHE STRING "sherpa-onnx version (matches the vendored header)")
+# A k2-fsa/sherpa-onnx release ("1.13.8"), or <last release>-<commit> for an
+# unreleased master snapshot ("1.13.8-a63f821"): the prebuilt workflow checks out
+# v<release> or <commit> accordingly. The pinned snapshot is the first with the
+# espeak-ng-free TTS frontend (k2-fsa/sherpa-onnx#4055), which we complete with
+# phonemizer/ in this repo.
+set(SHERPA_ONNX_VERSION "1.13.8-a63f821" CACHE STRING "sherpa-onnx version (matches the vendored header)")
 if(AVND_ADDON_SCORE)
   set(_sherpa_fetch_default ON)
 else()
@@ -123,7 +128,8 @@ set(SHERPA_ONNX_PREBUILT_TAG
 # --- Headers: always the vendored copy. Compilation needs nothing else. ---
 add_library(sherpa_headers INTERFACE)
 target_include_directories(sherpa_headers INTERFACE
-    "${CMAKE_CURRENT_LIST_DIR}/../3rdparty/sherpa-onnx/include")
+    "${CMAKE_CURRENT_LIST_DIR}/../3rdparty/sherpa-onnx/include"
+    "${CMAKE_CURRENT_LIST_DIR}/../phonemizer/include")
 target_compile_definitions(sherpa_headers INTERFACE
     SHERPA_PLUGINS_ORT_API_VERSION=${_sherpa_ort_api}
     SHERPA_PLUGINS_ORT_VERSION="${_sherpa_ort_version}")

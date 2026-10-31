@@ -22,6 +22,7 @@
 #include <filesystem>
 #include <initializer_list>
 #include <string>
+#include <vector>
 #include <string_view>
 
 namespace sherpa::model
@@ -100,6 +101,24 @@ inline std::string file_if_exists(const fs::path& dir, std::string_view name)
   return fs::exists(p, ec) ? p.string() : std::string{};
 }
 
+// The LLM-based recognizers (qwen3-asr, funasr-nano) take a HuggingFace tokenizer
+// DIRECTORY rather than a tokens.txt: a "tokenizer" subfolder for qwen3-asr, a
+// "Qwen3-0.6B" one for funasr-nano. Any subfolder holding tokenizer.json will do.
+inline std::string find_tokenizer_dir(const fs::path& dir)
+{
+  std::error_code ec;
+  if(!fs::is_directory(dir, ec))
+    return {};
+  if(fs::is_directory(dir / "tokenizer", ec))
+    return (dir / "tokenizer").string();
+  for(const auto& e : fs::directory_iterator(dir, ec))
+  {
+    if(e.is_directory(ec) && fs::exists(e.path() / "tokenizer.json", ec))
+      return e.path().string();
+  }
+  return {};
+}
+
 // Lowercased last path component, robust to a trailing separator: a folder path
 // like ".../my-model/" has an EMPTY filename(), which would break the family
 // auto-detection that keys on the directory name. Fall back to the parent then.
@@ -147,16 +166,50 @@ inline OfflineRecognizerHandle create_offline_recognizer(
   std::string uncached = find_in_dir(d, {"uncached"});
   std::string cached = find_in_dir(d, {"cached"});
   std::string mencoder = enc.empty() ? find_in_dir(d, {"encode"}) : enc;
+  // LLM-based recognizers: qwen3-asr (conv_frontend + encoder + decoder) and
+  // funasr-nano (encoder_adaptor + llm + embedding), both with a tokenizer dir.
+  std::string conv_frontend = find_in_dir(d, {"conv_frontend"});
+  std::string enc_adaptor = find_in_dir(d, {"encoder_adaptor"});
+  std::string llm = find_in_dir(d, {"llm"});
+  std::string embedding = find_in_dir(d, {"embedding"});
+  std::string tokenizer = find_tokenizer_dir(d);
+  // "encoder" also matches funasr-nano's encoder_adaptor; it is not an encoder.
+  if(!enc_adaptor.empty() && enc == enc_adaptor)
+    enc.clear();
   auto has = [&](std::string_view w) {
     return icontains(any, w) || icontains(dirname, w);
   };
 
+  auto set_qwen3 = [&] {
+    cfg.model_config.qwen3_asr.conv_frontend = conv_frontend.c_str();
+    cfg.model_config.qwen3_asr.encoder = enc.c_str();
+    cfg.model_config.qwen3_asr.decoder = dec.c_str();
+    cfg.model_config.qwen3_asr.tokenizer = tokenizer.c_str();
+  };
+  auto set_funasr_nano = [&] {
+    cfg.model_config.funasr_nano.encoder_adaptor = enc_adaptor.c_str();
+    cfg.model_config.funasr_nano.llm = llm.c_str();
+    cfg.model_config.funasr_nano.embedding = embedding.c_str();
+    cfg.model_config.funasr_nano.tokenizer = tokenizer.c_str();
+  };
+
   // Populate the config for an explicit sherpa model-type name; returns false if
   // the files that family needs are absent. Covers every offline family exposed
-  // by the C API EXCEPT funasr_nano (an LLM pipeline needing a dedicated
-  // multi-file config -- reach that one via sherpa's own tooling).
+  // by the C API.
   auto set_family = [&](std::string_view t) -> bool {
-    if(t == "transducer")
+    if(t == "qwen3_asr" || t == "qwen3")
+    {
+      if(conv_frontend.empty() || enc.empty() || dec.empty() || tokenizer.empty())
+        return false;
+      set_qwen3();
+    }
+    else if(t == "funasr_nano")
+    {
+      if(enc_adaptor.empty() || llm.empty() || embedding.empty() || tokenizer.empty())
+        return false;
+      set_funasr_nano();
+    }
+    else if(t == "transducer")
     {
       if(enc.empty() || dec.empty() || joiner.empty())
         return false;
@@ -192,6 +245,8 @@ inline OfflineRecognizerHandle create_offline_recognizer(
         return false;
       cfg.model_config.cohere_transcribe.encoder = enc.c_str();
       cfg.model_config.cohere_transcribe.decoder = dec.c_str();
+      cfg.model_config.cohere_transcribe.use_punct = 1;
+      cfg.model_config.cohere_transcribe.use_itn = 1;
     }
     else if(t == "moonshine")
     {
@@ -222,7 +277,13 @@ inline OfflineRecognizerHandle create_offline_recognizer(
     else if(t == "nemo_ctc" || t == "nemo")
       cfg.model_config.nemo_ctc.model = any.c_str();
     else if(t == "tdnn" || t == "yesno")
+    {
       cfg.model_config.tdnn.model = any.c_str();
+      // The yes/no TDNN is trained on 23-dim fbank at 8 kHz: with the default
+      // 80-dim features it never returns a result.
+      cfg.feat_config.sample_rate = 8000;
+      cfg.feat_config.feature_dim = 23;
+    }
     else if(t == "omnilingual")
       cfg.model_config.omnilingual.model = any.c_str();
     else if(t == "medasr")
@@ -245,6 +306,14 @@ inline OfflineRecognizerHandle create_offline_recognizer(
       cfg.model_config.transducer.encoder = enc.c_str();
       cfg.model_config.transducer.decoder = dec.c_str();
       cfg.model_config.transducer.joiner = joiner.c_str();
+    }
+    else if(!conv_frontend.empty() && !enc.empty() && !dec.empty() && !tokenizer.empty())
+    {
+      set_qwen3();
+    }
+    else if(!enc_adaptor.empty() && !llm.empty() && !embedding.empty() && !tokenizer.empty())
+    {
+      set_funasr_nano();
     }
     else if(has("moonshine") || (!preproc.empty() && !uncached.empty() && !cached.empty()))
     {
@@ -274,6 +343,8 @@ inline OfflineRecognizerHandle create_offline_recognizer(
     {
       cfg.model_config.cohere_transcribe.encoder = enc.c_str();
       cfg.model_config.cohere_transcribe.decoder = dec.c_str();
+      cfg.model_config.cohere_transcribe.use_punct = 1;
+      cfg.model_config.cohere_transcribe.use_itn = 1;
     }
     else if(has("paraformer"))
     {
@@ -299,6 +370,8 @@ inline OfflineRecognizerHandle create_offline_recognizer(
     else if(has("tdnn") || has("yesno"))
     {
       cfg.model_config.tdnn.model = any.c_str();
+      cfg.feat_config.sample_rate = 8000; // see the forced "tdnn" case above
+      cfg.feat_config.feature_dim = 23;
     }
     else if(has("omnilingual"))
     {
@@ -349,7 +422,53 @@ inline OfflineRecognizerHandle create_offline_recognizer(
     adv.apply_cstr("language", cfg.model_config.whisper.language);
     adv.apply_cstr("task", cfg.model_config.whisper.task);
     adv.apply_int("tail_paddings", cfg.model_config.whisper.tail_paddings);
+    // Cohere Transcribe.
+    adv.apply_cstr("language", cfg.model_config.cohere_transcribe.language);
+    adv.apply_bool01("use_punct", cfg.model_config.cohere_transcribe.use_punct);
+    adv.apply_bool01("use_itn", cfg.model_config.cohere_transcribe.use_itn);
+    // LLM-based recognizers (qwen3-asr / funasr-nano); unset ones keep
+    // sherpa's defaults.
+    auto& q = cfg.model_config.qwen3_asr;
+    auto& f = cfg.model_config.funasr_nano;
+    adv.apply_cstr("hotwords", q.hotwords);
+    adv.apply_cstr("hotwords", f.hotwords);
+    adv.apply_int("max_new_tokens", q.max_new_tokens);
+    adv.apply_int("max_new_tokens", f.max_new_tokens);
+    adv.apply_float("temperature", q.temperature);
+    adv.apply_float("temperature", f.temperature);
+    adv.apply_float("top_p", q.top_p);
+    adv.apply_float("top_p", f.top_p);
+    adv.apply_int("seed", q.seed);
+    adv.apply_int("seed", f.seed);
+    adv.apply_int("max_total_len", q.max_total_len);
+    adv.apply_cstr("language", f.language);
+    adv.apply_bool01("itn", f.itn);
+    adv.apply_cstr("system_prompt", f.system_prompt);
+    adv.apply_cstr("user_prompt", f.user_prompt);
+    // HLG decoding for CTC models: decode against a graph (closed vocabulary).
+    adv.apply_cstr("ctc_graph", cfg.ctc_fst_decoder_config.graph);
+    adv.apply_int("ctc_max_active", cfg.ctc_fst_decoder_config.max_active);
   }
+
+  // A relative file in Advanced (ctc_graph=HLG.fst) names a file of the model
+  // folder: a preset or a document can then carry it without an absolute path.
+  std::string hotwords_path, rule_fsts_path, graph_path;
+  const auto in_model_dir = [&](const char*& value, std::string& storage) {
+    if(!value || !*value)
+      return;
+    const fs::path p{value};
+    std::error_code ec;
+    if(p.is_absolute() || fs::exists(p, ec))
+      return;
+    if(const auto in_dir = d / p; fs::exists(in_dir, ec))
+    {
+      storage = in_dir.string();
+      value = storage.c_str();
+    }
+  };
+  in_model_dir(cfg.hotwords_file, hotwords_path);
+  in_model_dir(cfg.rule_fsts, rule_fsts_path);
+  in_model_dir(cfg.ctc_fst_decoder_config.graph, graph_path);
 
   OfflineRecognizerHandle h{L.SherpaOnnxCreateOfflineRecognizer(&cfg)};
   SHERPA_DBG(
@@ -411,14 +530,17 @@ inline OnlineRecognizerHandle create_online_recognizer(
     cfg.model_config.paraformer.encoder = enc.c_str();
     cfg.model_config.paraformer.decoder = dec.c_str();
   }
+  // Before the generic "ctc" test: a streaming NeMo CTC dir has "ctc" in its
+  // name too, and sherpa exits the process on a zipformer2 model without its
+  // metadata.
+  else if(icontains(any, "nemo") || icontains(dirname, "nemo"))
+  {
+    cfg.model_config.nemo_ctc.model = any.c_str();
+  }
   else if(icontains(any, "ctc") || icontains(dirname, "ctc")
           || icontains(any, "zipformer"))
   {
     cfg.model_config.zipformer2_ctc.model = any.c_str();
-  }
-  else if(icontains(any, "nemo"))
-  {
-    cfg.model_config.nemo_ctc.model = any.c_str();
   }
   else if(icontains(any, "t-one") || icontains(any, "tone")
           || icontains(dirname, "t-one"))
@@ -541,7 +663,51 @@ inline int vad_window_size(std::string_view path)
 // ---------------------------------------------------------------------------
 // TTS
 // ---------------------------------------------------------------------------
-inline TtsHandle create_tts(
+
+// Every lexicon*.txt in dir, comma-separated (the form sherpa takes several in):
+// kokoro multi-lang ships lexicon-us-en.txt + lexicon-zh.txt, most others a
+// single lexicon.txt.
+inline std::string find_lexicons(const fs::path& dir)
+{
+  std::vector<std::string> found;
+  std::error_code ec;
+  if(fs::is_directory(dir, ec))
+  {
+    for(const auto& e : fs::directory_iterator(dir, ec))
+    {
+      if(!e.is_regular_file())
+        continue;
+      auto name = to_lower(e.path().filename().string());
+      if(name.starts_with("lexicon") && name.ends_with(".txt"))
+        found.push_back(e.path().string());
+    }
+  }
+  std::sort(found.begin(), found.end());
+  std::string out;
+  for(const auto& f : found)
+  {
+    if(!out.empty())
+      out += ',';
+    out += f;
+  }
+  return out;
+}
+
+// A loaded TTS model, and how its input text has to be handed to it.
+//
+// sherpa-onnx no longer phonemizes (k2-fsa/sherpa-onnx#4055): a model reads text
+// through a lexicon, or takes espeak-ng phonemes computed by the caller. The
+// latter is `phonemize`: run the text through PhonemizerLoader with `voice`,
+// using the model's own espeak-ng-data (`espeak_data`).
+struct TtsModel
+{
+  TtsHandle tts;
+  bool phonemize = false;
+  std::string espeak_data;
+  std::string voice;
+};
+
+inline TtsModel create_tts(
     std::string_view dir, int num_threads, const char* provider = "cpu",
     std::string_view advanced = {})
 {
@@ -555,7 +721,7 @@ inline TtsHandle create_tts(
   std::string model = find_in_dir(d, {"model"});
   if(model.empty())
     model = find_in_dir(d, {}); // first .onnx
-  std::string lexicon = file_if_exists(d, "lexicon.txt");
+  std::string lexicon = find_lexicons(d);
   std::string data_dir;
   {
     std::error_code ec;
@@ -596,8 +762,6 @@ inline TtsHandle create_tts(
     cfg.model.zipvoice.encoder = enc.c_str();
     cfg.model.zipvoice.decoder = dec.c_str();
     cfg.model.zipvoice.vocoder = vocoder.c_str();
-    if(!data_dir.empty())
-      cfg.model.zipvoice.data_dir = data_dir.c_str();
     if(!lexicon.empty())
       cfg.model.zipvoice.lexicon = lexicon.c_str();
   }
@@ -648,20 +812,21 @@ inline TtsHandle create_tts(
     cfg.model.kitten.model = model.c_str();
     cfg.model.kitten.voices = voices.c_str();
     cfg.model.kitten.tokens = tokens.c_str();
-    if(!data_dir.empty())
-      cfg.model.kitten.data_dir = data_dir.c_str();
+    if(!lexicon.empty())
+      cfg.model.kitten.lexicon = lexicon.c_str();
     cfg.model.kitten.length_scale = 1.0f;
     adv.apply_float("length_scale", cfg.model.kitten.length_scale);
   }
   else if(!voices.empty())
   {
     family = "kokoro";
-    // Kokoro (model.onnx + voices.bin + tokens [+ espeak-ng-data]).
+    // Kokoro (model.onnx + voices.bin + tokens [+ lexicons or espeak-ng-data]).
     cfg.model.kokoro.model = model.c_str();
     cfg.model.kokoro.voices = voices.c_str();
     cfg.model.kokoro.tokens = tokens.c_str();
-    if(!data_dir.empty())
-      cfg.model.kokoro.data_dir = data_dir.c_str();
+    if(!lexicon.empty())
+      cfg.model.kokoro.lexicon = lexicon.c_str();
+    adv.apply_cstr("lang", cfg.model.kokoro.lang);
     cfg.model.kokoro.length_scale = 1.0f;
     adv.apply_float("length_scale", cfg.model.kokoro.length_scale);
   }
@@ -677,8 +842,6 @@ inline TtsHandle create_tts(
     cfg.model.matcha.tokens = tokens.c_str();
     if(!lexicon.empty())
       cfg.model.matcha.lexicon = lexicon.c_str();
-    if(!data_dir.empty())
-      cfg.model.matcha.data_dir = data_dir.c_str();
     cfg.model.matcha.noise_scale = 0.667f;
     cfg.model.matcha.length_scale = 1.0f;
     adv.apply_float("noise_scale", cfg.model.matcha.noise_scale);
@@ -692,8 +855,6 @@ inline TtsHandle create_tts(
     cfg.model.vits.tokens = tokens.c_str();
     if(!lexicon.empty())
       cfg.model.vits.lexicon = lexicon.c_str();
-    if(!data_dir.empty())
-      cfg.model.vits.data_dir = data_dir.c_str();
     cfg.model.vits.noise_scale = 0.667f;
     cfg.model.vits.noise_scale_w = 0.8f;
     cfg.model.vits.length_scale = 1.0f;
@@ -714,9 +875,39 @@ inline TtsHandle create_tts(
   adv.apply_int("max_num_sentences", cfg.max_num_sentences);
 
   SHERPA_DBG("[sherpa] TTS family='%s' -> SherpaOnnxCreateOfflineTts...\n", family);
-  TtsHandle h{L.SherpaOnnxCreateOfflineTts(&cfg)};
-  SHERPA_DBG("[sherpa] TTS create %s (family='%s')\n", h ? "OK" : "FAILED", family);
-  return h;
+  TtsModel m;
+  m.tts = TtsHandle{L.SherpaOnnxCreateOfflineTts(&cfg)};
+  SHERPA_DBG("[sherpa] TTS create %s (family='%s')\n", m.tts ? "OK" : "FAILED", family);
+  if(!m.tts)
+    return m;
+
+  // The espeak-based families read text through a lexicon when the model ships
+  // one, and need the caller's phonemes otherwise. zipvoice, supertonic and
+  // pocket have their own text frontends.
+  const std::string_view fam{family};
+  const bool espeak_family
+      = fam == "vits" || fam == "matcha" || fam == "kokoro" || fam == "kitten";
+  if(espeak_family && lexicon.empty() && !data_dir.empty())
+  {
+    m.phonemize = true;
+    m.espeak_data = data_dir;
+    // The espeak-ng voice: an explicit `voice = ...`, else what the model's
+    // metadata says, else en-us (what upstream falls back to as well).
+    if(const char* v = adv.get_cstr("voice"))
+      m.voice = v;
+    else if(L.SherpaOnnxOfflineTtsLang && L.SherpaOnnxDestroyOfflineTtsLang)
+    {
+      if(const char* lang = L.SherpaOnnxOfflineTtsLang(m.tts.get()))
+      {
+        m.voice = lang;
+        L.SherpaOnnxDestroyOfflineTtsLang(lang);
+      }
+    }
+    if(m.voice.empty())
+      m.voice = "en-us";
+    SHERPA_DBG("[sherpa] TTS phonemizes with espeak-ng voice '%s'\n", m.voice.c_str());
+  }
+  return m;
 }
 
 }

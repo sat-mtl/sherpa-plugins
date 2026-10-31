@@ -65,3 +65,47 @@ TEST_CASE("Offline ASR transcribes a spoken utterance", "[asr][offline][workflow
     REQUIRE_FALSE(obj.outputs.text.value.empty());
   }
 }
+
+// HLG decoding for an offline CTC model, through the Advanced port: with a
+// graph attached the decoder may only emit words the graph contains.
+//
+// Requires (not run in CI: the model is ~380 MB):
+//   SHERPA_TEST_ASR_HLG_MODEL = sherpa-onnx-zipformer-ctc-en-2023-10-02 (with HLG.fst)
+TEST_CASE("Offline CTC decodes through an HLG graph", "[asr][offline][workflow]")
+{
+  if(!test::loader_ready())
+    SHERPA_SKIP("sherpa-onnx runtime library not available");
+  auto model = test::env("SHERPA_TEST_ASR_HLG_MODEL");
+  if(!model)
+    SHERPA_SKIP("set SHERPA_TEST_ASR_HLG_MODEL");
+
+  const std::string dir = *model;
+  int sr = 0;
+  auto audio = test::load_wav_mono(dir + "/test_wavs/0.wav", sr);
+  REQUIRE(sr > 0);
+
+  auto job = std::make_shared<OfflineRecognizer::Job>();
+  job->samples = audio;
+  job->rate = sr;
+  job->num_threads = 1;
+  job->reload = true;
+  job->want_model = dir;
+  job->advanced = "ctc_graph = " + dir + "/HLG.fst";
+
+  auto cb = OfflineRecognizer::worker::work(job);
+  OfflineRecognizer obj;
+  REQUIRE(cb);
+  cb(obj);
+  obj(0);
+  INFO("recognized: " << obj.outputs.text.value);
+  REQUIRE_FALSE(obj.outputs.text.value.empty());
+
+  // The key does reach sherpa: a graph that does not exist fails the model.
+  job->reload = true;
+  job->advanced = "ctc_graph = " + dir + "/does-not-exist.fst";
+  auto cb2 = OfflineRecognizer::worker::work(job);
+  OfflineRecognizer obj2;
+  cb2(obj2);
+  obj2(0);
+  CHECK(obj2.outputs.text.value.empty());
+}

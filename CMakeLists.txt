@@ -143,6 +143,7 @@ target_sources(sherpa_plugins PRIVATE
     src/compat/dylib_loader.hpp
     src/OnnxRuntimeLoader.hpp
     src/SherpaLoader.hpp
+    src/PhonemizerLoader.hpp
     src/helpers/Handles.hpp
     src/helpers/ModelConfig.hpp
     src/helpers/Options.hpp

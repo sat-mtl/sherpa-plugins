@@ -6,10 +6,14 @@
 // the mono audio output over the following blocks. Speaker id and speed are
 // exposed as controls.
 //
+// Models without a lexicon get espeak-ng phonemes computed here (see
+// PhonemizerLoader.hpp), since sherpa-onnx no longer phonemizes text itself.
+//
 // operator() (audio thread) only copies pre-rendered samples into the output bus;
 // synthesis, model loading and resampling happen on the worker. The worker result
 // is applied on the processing thread, so the playback buffer needs no locking.
 
+#include "PhonemizerLoader.hpp"
 #include "helpers/Common.hpp"
 #include "helpers/ModelConfig.hpp"
 
@@ -22,6 +26,7 @@
 #include <halp/soundfile_port.hpp>
 
 #include <atomic>
+#include <cstdio>
 #include <cstring>
 #include <functional>
 #include <memory>
@@ -38,7 +43,7 @@ public:
   halp_meta(c_name, "sherpa_tts")
   halp_meta(category, "AI/Audio")
   halp_meta(author, "Jean-Michaël Celerier")
-  halp_meta(description, "Text-to-speech with sherpa-onnx (vits / matcha / kokoro)")
+  halp_meta(description, "Text-to-speech with sherpa-onnx (vits / matcha / kokoro / kitten / zipvoice / pocket / supertonic)")
   halp_meta(uuid, "c4c33e8c-9eb5-4065-bec6-86c46c4d8854")
 
   struct
@@ -79,7 +84,7 @@ public:
     std::string ref_text;
     std::string advanced;
     double host_rate = 48000.;
-    std::shared_ptr<TtsHandle> tts;
+    std::shared_ptr<model::TtsModel> tts;
     std::vector<float> out; // synthesized, resampled to host_rate, mono
   };
 
@@ -97,7 +102,7 @@ private:
 
   bool m_available = SherpaLoader::instance().available;
   double m_host_rate = 48000.;
-  std::shared_ptr<TtsHandle> m_tts;
+  std::shared_ptr<model::TtsModel> m_tts;
   std::shared_ptr<Job> m_job;
   std::atomic<bool> m_inflight{false};
   std::vector<float> m_playback; // host-rate mono, read on the audio thread
@@ -207,15 +212,29 @@ inline std::function<void(Tts&)> Tts::worker::work(std::shared_ptr<Job> job)
 {
   const auto& L = SherpaLoader::instance();
 
-  if(job->reload || !job->tts || !*job->tts)
+  if(job->reload || !job->tts || !job->tts->tts)
   {
-    job->tts = std::make_shared<TtsHandle>(
+    job->tts = std::make_shared<model::TtsModel>(
         model::create_tts(job->want_model, job->num_threads,
                           provider_str(job->provider), job->advanced));
   }
 
   job->out.clear();
-  if(job->tts && *job->tts && !job->text.empty())
+  const SherpaPluginsPhonemes* phonemes = nullptr;
+  if(job->tts && job->tts->tts && job->tts->phonemize && !job->text.empty())
+  {
+    const auto& P = PhonemizerLoader::instance();
+    if(P.available)
+      phonemes = P.SherpaPluginsPhonemize(
+          job->tts->espeak_data.c_str(), job->tts->voice.c_str(), job->text.c_str());
+    else
+      std::fprintf(
+          stderr, "sherpa-plugins: this TTS model needs the phonemizer library, "
+                  "which is not available\n");
+  }
+
+  if(job->tts && job->tts->tts && !job->text.empty()
+     && (!job->tts->phonemize || phonemes))
   {
     SherpaOnnxGenerationConfig cfg;
     std::memset(&cfg, 0, sizeof(cfg));
@@ -232,9 +251,16 @@ inline std::function<void(Tts&)> Tts::worker::work(std::shared_ptr<Job> job)
     }
     if(!job->ref_text.empty())
       cfg.reference_text = job->ref_text.c_str();
+    if(phonemes) // used in place of the text
+    {
+      cfg.phoneme_codepoints = phonemes->codepoints;
+      cfg.phoneme_codepoints_lens = phonemes->lens;
+      cfg.phoneme_codepoints_num_sentences = phonemes->num_sentences;
+    }
 
     const auto* audio = L.SherpaOnnxOfflineTtsGenerateWithConfig(
-        job->tts->get(), job->text.c_str(), &cfg, nullptr, nullptr);
+        job->tts->tts.get(), phonemes ? "" : job->text.c_str(), &cfg, nullptr,
+        nullptr);
     if(audio)
     {
       const int sr = audio->sample_rate;
@@ -266,6 +292,8 @@ inline std::function<void(Tts&)> Tts::worker::work(std::shared_ptr<Job> job)
       L.SherpaOnnxDestroyOfflineTtsGeneratedAudio(audio);
     }
   }
+  if(phonemes)
+    PhonemizerLoader::instance().SherpaPluginsPhonemizerFree(phonemes);
 
   return [job](Tts& self) {
     self.m_tts = job->tts;
