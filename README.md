@@ -37,7 +37,7 @@ So three layers: the prebuilt sherpa C-API `.so` ← a dlopen loader
 | `sherpa_denoiser`         | `Denoiser`         | audio → enhanced audio                       |
 | `sherpa_speaker`          | `Speaker`          | audio → embedding + enroll / identify       |
 | `sherpa_keyword_spotter`  | `KeywordSpotter`   | audio stream → keyword events               |
-| `sherpa_diarization`      | `Diarization`      | audio → {start, end, speaker}[]             |
+| `sherpa_diarization`      | `Diarization`      | audio → {start, end, speaker, confidence}[] |
 | `sherpa_source_separation`| `SourceSeparation` | audio → N separated stems                    |
 
 Every object exposes **Provider** (CPU/CUDA/CoreML/DirectML) and **Threads**; the
@@ -46,6 +46,57 @@ sherpa options (see `docs/COVERAGE.md`).
 
 All inference, model loading and result allocation happen on an Avendish
 **worker** thread — never on the audio/DSP thread.
+
+## Real-time or offline
+
+Seven objects work on live audio (or live text). Five only give a result once a
+recording is closed: their **Record** / **Listen** / **Capture** toggle goes off.
+Most offline speech models can still follow a live input hands-free through
+`sherpa_asr` in Batch mode, one result per sentence.
+
+### Real-time: continuous input, output while it runs
+
+| Object | What happens live | Latency |
+|---|---|---|
+| Streaming ASR (`sherpa_asr_online`) | Partial words while speaking, Final at each pause (endpoint) | ~0.1–0.6 s, depending on the model |
+| `sherpa_asr`, Streaming mode | Same as Streaming ASR | same |
+| VAD | Active is live; SpeechStart fires right away; Segment comes when the speech ends | tens of ms; Segment after the speech ends |
+| Keyword Spotter | Fires as soon as a keyword is said | ~0.3 s |
+| Denoiser (Auto or Online mode) | Cleaned audio out continuously | short; Offline mode works in ~1 s chunks |
+| TTS | Speaks when Text changes | the time to synthesize one sentence: fast for Piper, Kokoro, Kitten, Matcha, Supertonic; slower for the voice-cloning ZipVoice and Pocket |
+| Text Processor (punctuation) | Processes each text as it arrives | very short |
+
+Streaming speech models: Nemotron 0.6B (English, the most accurate), NeMo CTC
+80 ms (English, the lowest latency), Zipformer 20M (English: light, but makes
+many mistakes), Zipformer CTC (English), Paraformer (Chinese and English),
+T-one (Russian).
+
+### Offline: record a passage, get the result when it closes
+
+| Object | Toggle | Result |
+|---|---|---|
+| Offline ASR (`sherpa_asr_offline`) | Record | Text once Record goes off; Status says what was recorded or why no text came out |
+| Audio Labels (sound tagging, language ID) | Listen | Labels and language once Listen goes off |
+| Speaker ID | Capture | Speaker, score and embedding once Capture goes off |
+| Diarization | Record | Who spoke when, after processing the whole passage |
+| Source Separation | Record | Stems play back after the whole passage is processed |
+
+Offline-only speech models: Whisper (English and multilingual), Moonshine,
+SenseVoice, Paraformer (Chinese), Zipformer transducer, Zipformer CTC (with or
+without HLG), NeMo CTC conformer, Canary, Cohere, Dolphin, FireRed, TeleSpeech,
+WeNet (Cantonese), Omnilingual, MedASR, TDNN, Qwen3-ASR and FunASR-Nano.
+
+### Hands-free on live input: one result per sentence
+
+These offline objects can follow a live input; they still wait for each sentence
+to end, plus the decode time.
+
+- **`sherpa_asr` in Batch mode**, with any offline model above: its built-in VAD
+  cuts the input into sentences, and each is decoded when the speaker pauses.
+- **Offline ASR, Audio Labels and Speaker ID driven by a VAD:** cable the VAD's
+  Active output into Record, Listen or Capture.
+- **Diarization and Source Separation** have no live mode: they need the whole
+  passage.
 
 ## Building
 
@@ -72,7 +123,9 @@ this is the only way to get one before the `prebuilt-v<sherpa>-ort<ort>` release
 for the current version pair is published:
 
 ```bash
-git clone --depth 1 -b v1.13.4 https://github.com/k2-fsa/sherpa-onnx src
+# SHERPA_ONNX_VERSION in cmake/sherpa-onnx.cmake: v<release>, or the commit of
+# a "<release>-<commit>" snapshot
+git clone https://github.com/k2-fsa/sherpa-onnx src && git -C src checkout a63f821
 export SHERPA_ONNXRUNTIME_INCLUDE_DIR=<score-build>/_deps/onnxruntime-src/include
 export SHERPA_ONNXRUNTIME_LIB_DIR=<score-build>/_deps/onnxruntime-src/lib
 cmake -S src -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=ON \
@@ -85,6 +138,11 @@ cmake --build build --target install
 # Linux: the result must reference score's onnxruntime, not one of sherpa's own
 readelf -d install/lib/libsherpa-onnx-c-api.so | grep NEEDED   # libonnxruntime.so.1
 nm -D --undefined-only install/lib/libsherpa-onnx-c-api.so | grep Ort # @VERS_1.27.1
+
+# The phonemizer (see "TTS and the phonemizer" below), into the same tree
+cmake -S phonemizer -B build-phonemizer -G Ninja -DCMAKE_BUILD_TYPE=Release \
+      -DCMAKE_INSTALL_PREFIX=$PWD/install
+cmake --build build-phonemizer --target install
 ```
 
 then configure score (or this addon) with `-DSHERPA_ONNX_DIR=<...>/install`.
@@ -116,8 +174,23 @@ unavailable instead of crashing.
 Set `SHERPA_ONNXRUNTIME_PATH` to override the search, and `SHERPA_PLUGINS_DEBUG=1`
 to print which library was resolved and where from.
 
-TTS additionally needs the model's `espeak-ng-data/` directory (supplied with the
-model).
+### TTS and the phonemizer
+
+sherpa-onnx no longer turns text into phonemes itself (it dropped espeak-ng and
+piper-phonemize to be GPL-free, k2-fsa/sherpa-onnx#4055). A TTS model now reads
+text in one of two ways:
+
+* through a **lexicon** — when the model folder has `lexicon*.txt` (all of them
+  are passed, e.g. kokoro multi-lang's `lexicon-us-en.txt` + `lexicon-zh.txt`);
+* otherwise, for the espeak-based families (vits/piper, matcha, kokoro, kitten)
+  with an `espeak-ng-data/` folder, from **espeak-ng phonemes** that the plugin
+  computes itself with `libsherpa-plugins-phonemizer` (`phonemizer/`: piper-phonemize
+  + espeak-ng behind a C ABI, built and shipped next to sherpa-onnx, dlopen'd by
+  `src/PhonemizerLoader.hpp`). The espeak voice comes from the model's metadata
+  (`SherpaOnnxOfflineTtsLang`), falling back to `en-us`; override it with
+  `voice = fr` in the TTS object's `Advanced` port.
+
+espeak-ng is GPL-3.0-or-later, and so is the phonemizer library.
 
 > Status: initial scaffold. Needs a first local compile pass; a few halp
 > member spellings (soundfile port) and the prebuilt-release asset URLs are
