@@ -11,8 +11,8 @@
 #include <string>
 #include <vector>
 
-// The onnxruntime the prebuilt libsherpa-onnx-c-api was linked against; set from
-// cmake/sherpa-onnx.cmake.
+// The onnxruntime libsherpa-onnx-c-api was built against, either the prebuilt
+// release or the system library; set from cmake/sherpa-onnx.cmake.
 #if !defined(SHERPA_PLUGINS_ORT_API_VERSION)
 #define SHERPA_PLUGINS_ORT_API_VERSION 27
 #endif
@@ -52,23 +52,26 @@ struct OnnxRuntimeLoader
 private:
   static std::vector<std::string> names()
   {
-#if defined(_WIN32)
-    return {"onnxruntime.dll"};
-#elif defined(__APPLE__)
-    // Microsoft moved the install name to the major-only libonnxruntime.1.dylib
-    // in 1.26; before that it was the full version.
     return {
-        "libonnxruntime.dylib", "libonnxruntime.1.dylib",
-        "libonnxruntime." SHERPA_PLUGINS_ORT_VERSION ".dylib"};
-#else
-    return {"libonnxruntime.so.1", "libonnxruntime.so"};
+#if defined(SHERPA_PLUGINS_ORT_LIBRARY_NAME)
+        SHERPA_PLUGINS_ORT_LIBRARY_NAME,
 #endif
+#if defined(_WIN32)
+        "onnxruntime.dll"
+#elif defined(__APPLE__)
+        // Microsoft moved the install name to the major-only name in 1.26.
+        "libonnxruntime.dylib", "libonnxruntime.1.dylib",
+        "libonnxruntime." SHERPA_PLUGINS_ORT_VERSION ".dylib"
+#else
+        "libonnxruntime.so.1", "libonnxruntime.so"
+#endif
+    };
   }
 
   static std::vector<std::string> folders()
   {
-    const std::string mod = ossia::get_module_folder();
-    const std::string exe = ossia::get_exe_folder();
+    const std::string mod = sherpa_compat::get_module_folder();
+    const std::string exe = sherpa_compat::get_exe_folder();
 #if defined(_WIN32)
     return {
         mod + "/",

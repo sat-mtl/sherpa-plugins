@@ -8,16 +8,16 @@ compiled, without rewrite, to every host that has a real object model
 
 ## Strategy
 
-sherpa-onnx is painful to build cross-platform (it does not build with clang).
-We never build it here. Instead:
+The plugin only consumes sherpa-onnx's C ABI. Its runtime libraries are built
+separately, either as published prebuilts or against the system ONNX Runtime:
 
-- **sherpa-onnx already ships a complete C ABI** (`sherpa-onnx/c-api/c-api.h`,
-  ~200 `extern "C"` functions) and a `BUILD_SHARED_LIBS=ON` switch that emits a
-  single `libsherpa-onnx-c-api.{so,dll,dylib}` (+ a sibling `libonnxruntime`).
-  That prebuilt shared library is built once per platform with each platform's
-  supported toolchain (gcc / MSVC / Apple-clang).
+- **sherpa-onnx ships a complete C ABI** (`sherpa-onnx/c-api/c-api.h`,
+  ~200 `extern "C"` functions) and a `BUILD_SHARED_LIBS=ON` switch that emits
+  `libsherpa-onnx-c-api.{so,dll,dylib}`.
+- Non-system score builds and standalone packages can use the published runtime
+  for their platform and ONNX Runtime version.
 - This (clang-built) addon only `#include`s the pure-C `c-api.h` and
-  **`dlopen`s** the prebuilt library at runtime — it never links it. Missing
+  **`dlopen`s** the runtime library — it never links it. Missing
   library ⇒ the object simply reports unavailable instead of failing to load.
 
 So three layers: the prebuilt sherpa C-API `.so` ← a dlopen loader
@@ -112,15 +112,52 @@ cmake --build build
 The same `CMakeLists.txt` also builds as an ossia/score addon when dropped into
 a score source tree (it reuses score's Avendish via `find_package(Avendish)`).
 
-Neither the download nor `SHERPA_ONNX_DIR` is needed to *compile*: compilation
-only uses the vendored C header. When the runtime library cannot be located CMake
-warns and keeps going, and the objects report themselves unavailable at run time.
-Pass `-DSHERPA_ONNX_REQUIRE_LIBS=ON` (implied by a score deployment build) to turn
-that into a configuration error, so a release is never packaged without it.
+Plugin compilation only uses the vendored C header. In existing/prebuilt runtime
+mode, a missing runtime warns and leaves the objects unavailable at run time.
+Pass `-DSHERPA_ONNX_REQUIRE_LIBS=ON` (implied by a score deployment build) to make
+that a configuration error. System-library score builds instead build the
+compatible runtime as a plugin dependency.
 
-Building the runtime library yourself, against the onnxruntime score deploys —
-this is the only way to get one before the `prebuilt-v<sherpa>-ort<ort>` release
-for the current version pair is published:
+Score and SDK builds inherit the host's MSVC runtime selection. Standalone
+Max/MSP builds select the static CRT. The vendored dynamic-library helpers use
+an addon-owned namespace, so static score builds do not redefine libossia symbols.
+
+### System-library score builds
+
+With `OSSIA_USE_SYSTEM_LIBRARIES=ON` and no explicit `SHERPA_ONNX_DIR`, the addon
+builds its pinned sherpa-onnx source and local phonemizer in an isolated CMake
+project. This requires CMake 3.28 or newer and the system ONNX Runtime development
+package (for example, Debian's `libonnxruntime-dev`).
+
+The runtime links the exact system library found by score, not a downloaded
+ONNX Runtime. The loader derives its API version, version string and library
+filename from that installation; generated runtime libraries are built before
+the plugin and included in deployment packages. System ONNX Runtime remains a
+system package dependency, not a second bundled copy.
+
+For an offline build, populate the source dependencies in advance through the
+usual `FETCHCONTENT_SOURCE_DIR_*` overrides, or supply an existing compatible
+runtime install as described below. These overrides are forwarded to the isolated
+runtime build.
+
+### Offline runtime installs and Flatpak
+
+An explicit `SHERPA_ONNX_DIR` takes precedence over system-library source builds
+and prebuilt downloads. Supply a runtime built against the same ONNX Runtime as
+the host, including the phonemizer, and disable fetching:
+
+```bash
+cmake -S score -B build -DSHERPA_ONNX_DIR=/path/to/runtime-install \
+      -DSHERPA_ONNX_FETCH_LIBS=OFF
+```
+
+Score's Flatpak manifest downloads checksummed, architecture-specific runtime
+archives during source acquisition, installs matching ONNX Runtime headers and
+libraries, and passes `/app/opt/sherpa-onnx` as the runtime install. Configuration
+and compilation therefore need no network access inside the build sandbox.
+
+To build a compatible runtime install manually (also useful before the matching
+prebuilt release has been published):
 
 ```bash
 # SHERPA_ONNX_VERSION in cmake/sherpa-onnx.cmake: v<release>, or the commit of
@@ -163,10 +200,10 @@ Pull requests that touch those files build the archives as workflow artifacts
 without publishing them. The sherpa build is cached per version pair and
 platform, so only the phonemizer rebuilds when nothing else changed.
 
-CMake downloads `prebuilt-v<sherpa>-ort<onnxruntime>` by default. A source
-package made from a `v*` tag downloads that tag's archives instead (`release.sh`
-records the tag in `cmake/sherpa-onnx-prebuilt-tag.txt`), and falls back to the
-version-pair release while they are still building. Pass
+For non-system score builds, CMake downloads `prebuilt-v<sherpa>-ort<onnxruntime>`
+by default. A source package made from a `v*` tag downloads that tag's archives
+instead (`release.sh` records the tag in `cmake/sherpa-onnx-prebuilt-tag.txt`), and
+falls back to the version-pair release while they are still building. Pass
 `-DSHERPA_ONNX_PREBUILT_TAG=prebuilt-continuous` for the latest ones; a download
 is kept per tag under `<build>/_deps/sherpa_onnx-prebuilt/`, so delete that
 folder to fetch a newer `prebuilt-continuous`.

@@ -1,8 +1,6 @@
 #pragma once
-// Vendored, self-contained copy of ossia::dylib_loader (from libossia,
-// ossia/detail/dylib_loader.hpp). Used so standalone builds need no libossia on
-// the include path. Kept API-compatible with ossia; in a score build the real
-// header is equivalent. Verbatim from ossia/score-addon-onnx.
+// Self-contained dynamic-library helpers for score and standalone hosts.
+// Keep them addon-owned: libossia provides different helpers with the same names.
 #ifdef _WIN32
 #include <windows.h>
 #else
@@ -17,7 +15,7 @@
 #include <string>
 #include <string_view>
 #include <vector>
-namespace ossia
+namespace sherpa_compat
 {
 class dylib_loader
 {

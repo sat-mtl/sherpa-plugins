@@ -44,17 +44,17 @@ private:
 #endif
 
   std::vector<std::string> m_paths;
-  std::unique_ptr<ossia::dylib_loader> m_lib;
+  std::unique_ptr<sherpa_compat::dylib_loader> m_lib;
 
   PhonemizerLoader() noexcept
   {
     // The same places SherpaLoader looks: it ships in the same directory.
-    const std::string mod = ossia::get_module_folder();
+    const std::string mod = sherpa_compat::get_module_folder();
     m_paths.push_back(mod + "/" + lib_name);
     m_paths.push_back(mod + "/../" + lib_name);
     m_paths.push_back(mod + "/../lib/" + lib_name);
     m_paths.push_back(mod + "/../../Frameworks/" + lib_name);
-    m_paths.push_back(ossia::get_exe_folder() + "/" + lib_name);
+    m_paths.push_back(sherpa_compat::get_exe_folder() + "/" + lib_name);
     m_paths.emplace_back(lib_name);
 
     std::vector<std::string_view> candidates;
@@ -64,7 +64,7 @@ private:
 
     try
     {
-      m_lib = std::make_unique<ossia::dylib_loader>(candidates);
+      m_lib = std::make_unique<sherpa_compat::dylib_loader>(candidates);
     }
     catch(const std::exception& e)
     {

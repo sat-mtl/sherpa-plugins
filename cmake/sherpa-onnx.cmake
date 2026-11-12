@@ -1,45 +1,19 @@
 # Resolve sherpa-onnx for sherpa-plugins.
 #
-# We dlopen the library at runtime (see src/SherpaLoader.hpp), so COMPILATION
-# depends only on the C header, which is VENDORED under
-# 3rdparty/sherpa-onnx/include (pinned to a known sherpa version). The prebuilt
-# .so/.dll/.dylib is purely a runtime/packaging concern. This module exposes:
-#   * sherpa::headers       - INTERFACE target carrying the vendored include dir
-#                             (no link! we dlopen)
-#   * SHERPA_SUPPORT_FILES   - the sherpa runtime libraries, shipped everywhere
-#   * SHERPA_ORT_SUPPORT_FILES - the onnxruntime beside them, shipped into
-#                             standalone packages only; a score build binds to the
-#                             host's copy (see src/OnnxRuntimeLoader.hpp)
+# Compilation uses the vendored C API header; the shared libraries are dlopened,
+# never linked into the plugin. Runtime resolution, in precedence order:
+#   1. SHERPA_ONNX_DIR: an existing install with lib/ (fully offline).
+#   2. score + OSSIA_USE_SYSTEM_LIBRARIES: build pinned sherpa and the local
+#      phonemizer against the actual system ONNX Runtime.
+#   3. SHERPA_ONNX_FETCH_LIBS: download the matching prebuilt release.
 #
-# To locate the runtime libraries (only needed to actually run/package):
-#   1. -DSHERPA_ONNX_DIR=/path/to/install   (a tree with lib/), e.g. the result of
-#      `cmake --install` on a `-DBUILD_SHARED_LIBS=ON` sherpa build, or
-#   2. -DSHERPA_ONNX_FETCH_LIBS=ON to download a prebuilt release archive.
-#
-# Neither is required to CONFIGURE or COMPILE: when the download is unavailable
-# (the release for this sherpa/onnxruntime pair has not been published yet) the
-# fetch degrades to a warning and the objects simply report unavailable at run
-# time. It is an ERROR only when the libraries are actually about to be shipped,
-# i.e. SHERPA_ONNX_REQUIRE_LIBS (default: on in a score deployment build).
-#
-# Build the library yourself, per platform, with the supported toolchain --
-# pointing it at the SAME onnxruntime score deploys, or the result cannot bind to
-# score's copy (see src/OnnxRuntimeLoader.hpp and the commit that added it):
-#   export SHERPA_ONNXRUNTIME_INCLUDE_DIR=<score-build>/_deps/onnxruntime-src/include
-#   export SHERPA_ONNXRUNTIME_LIB_DIR=<score-build>/_deps/onnxruntime-src/lib
-#   cmake -S sherpa-onnx -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=ON \
-#     -DSHERPA_ONNX_ENABLE_C_API=ON -DSHERPA_ONNX_ENABLE_PYTHON=OFF \
-#     -DSHERPA_ONNX_ENABLE_BINARY=OFF -DSHERPA_ONNX_ENABLE_PORTAUDIO=OFF \
-#     -DSHERPA_ONNX_ENABLE_WEBSOCKET=OFF -DSHERPA_ONNX_ENABLE_TESTS=OFF
-#   cmake --install build --prefix sherpa-onnx-install
-# (PYTHON=OFF is required: BUILD_SHARED_LIBS=ON silently turns it on otherwise.)
-# Then configure this addon with -DSHERPA_ONNX_DIR=<...>/sherpa-onnx-install.
-# Check the result on Linux with
-#   readelf -d lib/libsherpa-onnx-c-api.so | grep NEEDED    # libonnxruntime.so.1
-#   nm -D --undefined-only lib/libsherpa-onnx-c-api.so | grep Ort  # @VERS_<ort>
+# Exposes sherpa::headers, SHERPA_SUPPORT_FILES, SHERPA_ORT_SUPPORT_FILES and,
+# for a generated runtime, SHERPA_RUNTIME_TARGET (build/install dependency).
+# Only standalone packages bundle ONNX Runtime; score uses its host runtime.
+# Missing optional prebuilts warn; SHERPA_ONNX_REQUIRE_LIBS makes them fatal.
 
 set(SHERPA_ONNX_DIR "" CACHE PATH
-    "Prebuilt sherpa-onnx install (with lib/). For running/packaging, not compiling.")
+    "Existing sherpa-onnx install (with lib/); takes precedence over automatic runtime resolution.")
 # A k2-fsa/sherpa-onnx release ("1.13.8"), or <last release>-<commit> for an
 # unreleased master snapshot ("1.13.8-a63f821"): the prebuilt workflow checks out
 # v<release> or <commit> accordingly. The pinned snapshot is the first with the
@@ -104,7 +78,8 @@ endif()
 # Advisory only, and skipped when score-addon-onnx has not been configured yet
 # (addons are configured in directory order, score-addon-onnx before this one).
 set(_sherpa_host_ort_file "${CMAKE_BINARY_DIR}/_deps/onnxruntime-src/VERSION_NUMBER")
-if(AVND_ADDON_SCORE AND EXISTS "${_sherpa_host_ort_file}")
+if(AVND_ADDON_SCORE AND NOT OSSIA_USE_SYSTEM_LIBRARIES
+   AND EXISTS "${_sherpa_host_ort_file}")
   file(READ "${_sherpa_host_ort_file}" _sherpa_host_ort)
   string(STRIP "${_sherpa_host_ort}" _sherpa_host_ort)
   if(NOT _sherpa_host_ort STREQUAL _sherpa_ort_version)
@@ -141,7 +116,13 @@ endif()
 set(SHERPA_ONNX_PREBUILT_TAG "${_sherpa_default_tag}"
     CACHE STRING "Release tag holding the prebuilt sherpa-onnx C API archives")
 
-# --- Headers: always the vendored copy. Compilation needs nothing else. ---
+# Resolve the system runtime before emitting the loader's API/version checks.
+set(SHERPA_RUNTIME_TARGET "")
+if(AVND_ADDON_SCORE AND OSSIA_USE_SYSTEM_LIBRARIES AND NOT SHERPA_ONNX_DIR)
+  include("${CMAKE_CURRENT_LIST_DIR}/sherpa-onnx-system.cmake")
+endif()
+
+# --- Headers: always the vendored copy. No runtime link dependency. ---
 add_library(sherpa_headers INTERFACE)
 target_include_directories(sherpa_headers INTERFACE
     "${CMAKE_CURRENT_LIST_DIR}/../3rdparty/sherpa-onnx/include"
@@ -149,13 +130,17 @@ target_include_directories(sherpa_headers INTERFACE
 target_compile_definitions(sherpa_headers INTERFACE
     SHERPA_PLUGINS_ORT_API_VERSION=${_sherpa_ort_api}
     SHERPA_PLUGINS_ORT_VERSION="${_sherpa_ort_version}")
+if(SHERPA_RUNTIME_TARGET)
+  target_compile_definitions(sherpa_headers INTERFACE
+    SHERPA_PLUGINS_ORT_LIBRARY_NAME="${_sherpa_system_ort_name}")
+endif()
 add_library(sherpa::headers ALIAS sherpa_headers)
 
 # --- Runtime libraries (optional): only needed to run/package the modules. ---
 set(_sherpa_root "")
 if(SHERPA_ONNX_DIR)
   set(_sherpa_root "${SHERPA_ONNX_DIR}")
-elseif(SHERPA_ONNX_FETCH_LIBS)
+elseif(NOT SHERPA_RUNTIME_TARGET AND SHERPA_ONNX_FETCH_LIBS)
   # Prebuilt C-API libraries produced by .github/workflows/sherpa-prebuilt.yml and
   # published to this repo's releases (see SHERPA_ONNX_PREBUILT_TAG above). Each
   # archive's root is include/ + lib/ (+ bin/ on Windows).
@@ -234,8 +219,8 @@ elseif(SHERPA_ONNX_FETCH_LIBS)
         "libraries: ${_sherpa_tried}. They are published by "
         ".github/workflows/sherpa-prebuilt.yml (on each push to main, and per "
         "tag). Meanwhile, build sherpa-onnx ${SHERPA_ONNX_VERSION} against "
-        "onnxruntime ${_sherpa_ort_version} and pass -DSHERPA_ONNX_DIR=<install> "
-        "(see the header of cmake/sherpa-onnx.cmake).")
+        "onnxruntime ${_sherpa_ort_version}, with BUILD_SHARED_LIBS=ON and "
+        "SHERPA_ONNX_ENABLE_C_API=ON, and pass -DSHERPA_ONNX_DIR=<install>.")
     string(JOIN "" _sherpa_dl_error ${_sherpa_dl_error})
     if(SHERPA_ONNX_REQUIRE_LIBS)
       message(FATAL_ERROR "${_sherpa_dl_error}")
@@ -262,8 +247,10 @@ elseif(SHERPA_ONNX_FETCH_LIBS)
   endif()
 endif()
 
-set(SHERPA_SUPPORT_FILES "")
-set(SHERPA_ORT_SUPPORT_FILES "")
+if(NOT SHERPA_RUNTIME_TARGET)
+  set(SHERPA_SUPPORT_FILES "")
+  set(SHERPA_ORT_SUPPORT_FILES "")
+endif()
 if(_sherpa_root)
   if(APPLE)
     file(GLOB _sherpa_all "${_sherpa_root}/lib/*.dylib")

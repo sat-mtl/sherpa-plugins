@@ -10,17 +10,11 @@ endif()
 # C is enabled because the vendored dlopen helper and the sherpa C header are C.
 project(sherpa_plugins LANGUAGES C CXX)
 
-# Max/MSP externals link the static CRT (/MT) on Windows; set it for the whole
-# addon -- before Avendish and the object libraries are created -- so every
-# target shares one runtime (mixing /MT and /MD trips MSVC with LNK2038).
-if(MSVC)
-  set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
-endif()
 if(WIN32)
   add_compile_definitions(NOMINMAX _USE_MATH_DEFINES)
 endif()
 
-# The vendored ossia::dylib_loader throws std::runtime_error when the library is
+# The vendored dylib_loader throws std::runtime_error when the library is
 # missing, and we catch it to set `available = false`; enable exceptions (like
 # ossia/score-addon-onnx does) so that try/catch is real and not a terminate().
 set(AVND_USES_EXCEPTIONS ON CACHE BOOL "" FORCE)
@@ -36,6 +30,12 @@ set(AVND_USES_EXCEPTIONS ON CACHE BOOL "" FORCE)
 # simply not found (OPTIONAL -> no-op).
 if(NOT TARGET score_lib_base)
   include(ScoreExternalAddon OPTIONAL)
+endif()
+
+# Standalone Max/MSP externals need /MT before Avendish creates dependencies.
+# Score's in-tree/SDK bootstrap instead supplies the host CRT selection.
+if(MSVC AND NOT (TARGET score_lib_base OR COMMAND score_common_setup))
+  set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 endif()
 
 # --- Avendish resolution (the dual-build switch) ---
@@ -152,14 +152,10 @@ target_sources(sherpa_plugins PRIVATE
 avnd_addon_finalize(NAME sherpa_plugins
     UUID 692ee9eb-6b46-428c-acd8-83528ea9d139 VERSION 1)
 
-# In a score build, sherpa-onnx is NOT a host-provided library (unlike onnxruntime
-# for score-addon-onnx, which the score host bundles). So when the runtime libs
-# were located (-DSHERPA_ONNX_DIR=<install-with-lib/> or -DSHERPA_ONNX_FETCH_LIBS=ON),
-# copy them next to the built plugin: the objects dlopen libsherpa-onnx-c-api from
-# their own module folder (get_module_folder()). Without this the plugin loads but
-# every object reports unavailable at runtime ("libsherpa-onnx-c-api.so ... not
-# found"). Standalone back-ends get the libs via avnd_addon_package below instead.
-# onnxruntime is not among them: see src/OnnxRuntimeLoader.hpp.
+# score dlopens sherpa and the phonemizer from the adjacent lib directory, not
+# the plugin directory (whose shared libraries score treats as score plugins).
+# Supplied/prebuilt trees are already present; a system-ORT runtime must first
+# finish its source build and private install. Never bundle system ONNX Runtime.
 if(AVND_ADDON_SCORE AND SHERPA_SUPPORT_FILES)
   # NOT into the plugin's own directory: score's PluginManager tries to load every
   # shared library it finds there and logs `"libsherpa-onnx-c-api.so" is not a
@@ -167,18 +163,29 @@ if(AVND_ADDON_SCORE AND SHERPA_SUPPORT_FILES)
   # SherpaLoader probes (mod, mod/.., mod/../lib, ...) and mirrors the installed
   # Linux layout below, so the build tree resolves the library exactly as an
   # installed score does.
-  add_custom_command(TARGET sherpa_plugins POST_BUILD
-    # <plugins>/../lib exists only in an installed score tree, and
-    # copy_if_different errors out on a missing destination directory.
-    COMMAND ${CMAKE_COMMAND} -E make_directory
-            "$<TARGET_FILE_DIR:sherpa_plugins>/../lib"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            ${SHERPA_SUPPORT_FILES} "$<TARGET_FILE_DIR:sherpa_plugins>/../lib"
-    COMMAND_EXPAND_LISTS VERBATIM
-    COMMENT "sherpa-plugins: copying sherpa-onnx runtime libs into <build>/lib")
+  if(SHERPA_RUNTIME_TARGET)
+    # A target dependency does not relink the dlopen-only plugin. Stage on every
+    # build so an incrementally rebuilt runtime cannot leave stale library copies.
+    add_custom_target(sherpa_plugins_stage_runtime
+      COMMAND ${CMAKE_COMMAND} -E make_directory
+              "$<TARGET_FILE_DIR:sherpa_plugins>/../lib"
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+              ${SHERPA_SUPPORT_FILES} "$<TARGET_FILE_DIR:sherpa_plugins>/../lib"
+      DEPENDS ${SHERPA_RUNTIME_TARGET}
+      COMMAND_EXPAND_LISTS VERBATIM
+      COMMENT "sherpa-plugins: staging the system-ORT runtime")
+    add_dependencies(sherpa_plugins sherpa_plugins_stage_runtime)
+  else()
+    add_custom_command(TARGET sherpa_plugins POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E make_directory
+              "$<TARGET_FILE_DIR:sherpa_plugins>/../lib"
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+              ${SHERPA_SUPPORT_FILES} "$<TARGET_FILE_DIR:sherpa_plugins>/../lib"
+      COMMAND_EXPAND_LISTS VERBATIM
+      COMMENT "sherpa-plugins: copying runtime libs into <build>/lib")
+  endif()
 
-  # The POST_BUILD above only populates the build tree. Destinations match where
-  # score installs onnxruntime, so both end up in one directory.
+  # Destinations match score's host ONNX Runtime installation.
   if(SCORE_DEPLOYMENT_BUILD)
     if(APPLE)
       install(FILES ${SHERPA_SUPPORT_FILES}
