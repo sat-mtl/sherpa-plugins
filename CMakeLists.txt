@@ -67,6 +67,15 @@ if(NOT Avendish_FOUND
   find_package(Avendish REQUIRED)
 endif()
 
+# The host's ONNX addon owns system-runtime discovery. Match its dependency
+# gate when the distribution provides no ONNX Runtime instead of fetching a
+# second runtime or failing the entire score configuration.
+if(AVND_ADDON_SCORE AND OSSIA_USE_SYSTEM_LIBRARIES
+   AND NOT SHERPA_ONNX_DIR AND NOT TARGET onnxruntime::onnxruntime)
+  message(STATUS "sherpa-plugins disabled: the host system ONNX Runtime is unavailable")
+  return()
+endif()
+
 # Resolves the prebuilt sherpa-onnx: exposes sherpa::headers (include-dir only,
 # because we dlopen the .so -- nothing on the link line) and SHERPA_SUPPORT_FILES
 # (the runtime libs to bundle next to each standalone module).

@@ -124,16 +124,21 @@ an addon-owned namespace, so static score builds do not redefine libossia symbol
 
 ### System-library score builds
 
-With `OSSIA_USE_SYSTEM_LIBRARIES=ON` and no explicit `SHERPA_ONNX_DIR`, the addon
-builds its pinned sherpa-onnx source and local phonemizer in an isolated CMake
-project. This requires CMake 3.28 or newer and the system ONNX Runtime development
-package (for example, Debian's `libonnxruntime-dev`).
+With `OSSIA_USE_SYSTEM_LIBRARIES=ON`, `score-addon-onnx` owns ONNX Runtime
+discovery and both addons use that same library. If the distribution provides no
+ONNX Runtime development package, both addons are omitted; sherpa does not fetch
+a second runtime to bypass the system-library setting.
 
-The runtime links the exact system library found by score, not a downloaded
-ONNX Runtime. The loader derives its API version, version string and library
-filename from that installation; generated runtime libraries are built before
-the plugin and included in deployment packages. System ONNX Runtime remains a
-system package dependency, not a second bundled copy.
+When the host provider is available and no explicit `SHERPA_ONNX_DIR` is supplied,
+the addon builds its pinned sherpa-onnx source and local phonemizer in an isolated
+CMake project. This requires CMake 3.28 or newer and the system ONNX Runtime
+development package (for example, Debian's `libonnxruntime-dev`).
+
+Only sherpa and the phonemizer are built, not ONNX Runtime. The loader derives
+its API version, version string and stable library SONAME from the host
+installation; generated runtime libraries are built before the plugin and
+included in deployment packages. ONNX Runtime remains a shared system package
+dependency, not a second bundled copy.
 
 For an offline build, populate the source dependencies in advance through the
 usual `FETCHCONTENT_SOURCE_DIR_*` overrides, or supply an existing compatible
@@ -151,10 +156,11 @@ cmake -S score -B build -DSHERPA_ONNX_DIR=/path/to/runtime-install \
       -DSHERPA_ONNX_FETCH_LIBS=OFF
 ```
 
-Score's Flatpak manifest downloads checksummed, architecture-specific runtime
-archives during source acquisition, installs matching ONNX Runtime headers and
-libraries, and passes `/app/opt/sherpa-onnx` as the runtime install. Configuration
-and compilation therefore need no network access inside the build sandbox.
+Score's Flatpak manifest provisions one shared ONNX Runtime through its common
+`onnxruntime.yaml` module, consumed by both addons and the tokenizer extension.
+It also prefetches the extension's GSL/JSON sources and the sherpa runtime
+archives, passing `/app/opt/sherpa-onnx` as sherpa's runtime install. Configuration
+and compilation need no network access inside the build sandbox.
 
 To build a compatible runtime install manually (also useful before the matching
 prebuilt release has been published):
