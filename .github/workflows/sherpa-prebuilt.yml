@@ -125,17 +125,18 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # ort_pkg: the Microsoft onnxruntime package to link against, per platform.
-          # ort_version overrides ORT_VERSION where score pins something else.
-          - { os: ubuntu-22.04,     triplet: linux-x64,    ext: tar.gz, ort_pkg: onnxruntime-linux-x64,     ort_ext: tgz }
+          # ort_rid: the runtime of the Microsoft.ML.OnnxRuntime NuGet package to link
+          # against, per platform. ort_version overrides ORT_VERSION where score pins
+          # something else.
+          - { os: ubuntu-22.04,     triplet: linux-x64,    ext: tar.gz, ort_rid: linux-x64 }
           # arm64 Linux runner (may need org enablement); remove if unavailable.
-          - { os: ubuntu-24.04-arm, triplet: linux-arm64,  ext: tar.gz, ort_pkg: onnxruntime-linux-aarch64, ort_ext: tgz }
-          - { os: macos-14,         triplet: macos-arm64,  ext: tar.gz, osx_arch: arm64, ort_pkg: onnxruntime-osx-arm64, ort_ext: tgz }
+          - { os: ubuntu-24.04-arm, triplet: linux-arm64,  ext: tar.gz, ort_rid: linux-arm64 }
+          - { os: macos-14,         triplet: macos-arm64,  ext: tar.gz, osx_arch: arm64, ort_rid: osx-arm64 }
           # Intel mac is cross-compiled on the arm64 runner: macos-13 (Intel)
           # runners are queue-starved / being retired. onnxruntime 1.23.2 is the
           # last release supporting x64, so this lane links that instead of
           # ORT_VERSION -- as score does.
-          - { os: macos-14,         triplet: macos-x64,    ext: tar.gz, osx_arch: x86_64, ort_pkg: onnxruntime-osx-universal2, ort_ext: tgz, ort_version: "1.23.2" }
+          - { os: macos-14,         triplet: macos-x64,    ext: tar.gz, osx_arch: x86_64, ort_rid: osx-x64, ort_version: "1.23.2" }
           # Windows keeps sherpa's own onnxruntime: PE has no symbol versioning
           # and the import is already the plain name "onnxruntime.dll", so it
           # already binds to whichever one is loaded. Supplying one is also broken
@@ -158,25 +159,30 @@ jobs:
           v="${{ matrix.ort_version }}"
           [ -n "$v" ] || v="${ORT}"
           echo "ORT_EFF=$v" >> "$GITHUB_ENV"
-          url="https://github.com/microsoft/onnxruntime/releases/download/v${v}/${{ matrix.ort_pkg }}-${v}.${{ matrix.ort_ext }}"
+          # github.com/microsoft/onnxruntime and its release archives are gone; the
+          # NuGet package carries the same binaries. Lay it out as those archives.
+          url="https://api.nuget.org/v3-flatcontainer/microsoft.ml.onnxruntime/${v}/microsoft.ml.onnxruntime.${v}.nupkg"
           echo "Fetching $url"
-          curl -fL --retry 3 -o ort.tgz "$url"
-          # Do NOT --strip-components: the layout is not the same across
-          # onnxruntime releases. 1.27.x archives are rooted at <pkg>/lib, while
-          # 1.23.2 (the macos-x64 lane) prefixes every entry with "./", which
-          # counts as the first component -- stripping one then lands a level
-          # short and lib/ is nowhere near where it was expected. Extract whole
-          # and find the directory that actually holds lib/.
-          mkdir -p ort && tar xzf ort.tgz -C ort
-          find ort -maxdepth 4 -type d -name lib > ort-libdirs.txt
-          libdir="$(head -1 ort-libdirs.txt)"
-          if [ -z "$libdir" ]; then
-            echo "::error::no lib/ directory inside $url"
-            find ort -maxdepth 3 | head -50
-            exit 1
-          fi
-          root="$(cd "$(dirname "$libdir")" && pwd)"
-          echo "onnxruntime package root: $root"
+          curl -fL --retry 3 -o ort.nupkg "$url"
+          mkdir -p nupkg && unzip -q ort.nupkg -d nupkg
+          native="nupkg/runtimes/${{ matrix.ort_rid }}/native"
+          root="$PWD/ort"
+          mkdir -p "$root/include" "$root/lib"
+          cp nupkg/build/native/include/*.h "$root/include/"
+          case "${{ matrix.ort_rid }}" in
+            osx-*)
+              cp "$native/libonnxruntime.dylib" "$root/lib/libonnxruntime.${v}.dylib"
+              ln -sf "libonnxruntime.${v}.dylib" "$root/lib/libonnxruntime.1.dylib"
+              ln -sf "libonnxruntime.${v}.dylib" "$root/lib/libonnxruntime.dylib"
+              ;;
+            *)
+              cp "$native/libonnxruntime.so" "$root/lib/libonnxruntime.so.${v}"
+              ln -sf "libonnxruntime.so.${v}" "$root/lib/libonnxruntime.so.1"
+              ln -sf libonnxruntime.so.1 "$root/lib/libonnxruntime.so"
+              cp "$native/libonnxruntime_providers_shared.so" "$root/lib/"
+              ;;
+          esac
+          echo "$v" > "$root/VERSION_NUMBER"
           echo "SHERPA_ONNXRUNTIME_INCLUDE_DIR=${root}/include" >> "$GITHUB_ENV"
           echo "SHERPA_ONNXRUNTIME_LIB_DIR=${root}/lib"         >> "$GITHUB_ENV"
           ls -la "${root}/lib"
